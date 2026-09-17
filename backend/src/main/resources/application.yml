@@ -1,0 +1,38 @@
+server:
+  port: 8899
+  address: 0.0.0.0
+
+spring:
+  application:
+    name: habit-coach-backend
+  datasource:
+    url: jdbc:h2:file:./data/habitcoach;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+    # database-platform intentionally omitted: Hibernate auto-detects H2 from
+    # the JDBC URL. Swapping to Postgres later only requires changing the
+    # datasource url/driver/credentials here — no entity/repository changes.
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+strands:
+  base-url: http://localhost:8900

@@ -1,0 +1,15 @@
+# Claude Code session/tooling
+.claude/
+CLAUDE.md
+CLAUDE_CONTEXT.md
+
+# Python virtual environment
+venv/
+
+# OS cruft
+.DS_Store
+*.log
+
+# Legacy browser/Python implementation
+frontend/
+requirements.txt

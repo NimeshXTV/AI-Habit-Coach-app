@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:habitcoach-test;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+# Deliberately unreachable: keeps HTTP-level integration tests (no live
+# Python process in the Gradle test suite) deterministic — every /current
+# call in @SpringBootTest exercises the fallback-template path, never a
+# flaky "someone happens to have something on port 8900" path.
+strands:
+  base-url: http://127.0.0.1:1
