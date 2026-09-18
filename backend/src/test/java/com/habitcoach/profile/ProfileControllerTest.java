@@ -31,30 +31,30 @@ class ProfileControllerTest {
 
     @Test
     void getReturns404WhenNoProfileYet() throws Exception {
-        mockMvc.perform(get("/api/profile"))
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("profile not found"));
     }
 
     @Test
     void postCreatesAProfileAndGetThenReturnsIt() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"Asha\",\"age\":29,\"gender\":\"female\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Asha"))
                 .andExpect(jsonPath("$.age").value(29))
                 .andExpect(jsonPath("$.gender").value("female"));
 
-        mockMvc.perform(get("/api/profile"))
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Asha"));
     }
 
     @Test
     void postTwiceUpsertsRatherThanCreatingASecondProfile() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"name\":\"Asha\",\"age\":29,\"gender\":\"female\"}")).andExpect(status().isOk());
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"Asha K.\",\"age\":30,\"gender\":\"female\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.name").value("Asha K."));
@@ -64,31 +64,31 @@ class ProfileControllerTest {
 
     @Test
     void blankNameReturns400() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"\",\"age\":20,\"gender\":\"other\"}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void ageOutOfRangeReturns400() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"Name\",\"age\":0,\"gender\":\"other\"}"))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"Name\",\"age\":150,\"gender\":\"other\"}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void missingFieldsReturn400() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void gendersOthersMapsToOtherOnTheWire() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"name\":\"Name\",\"age\":40,\"gender\":\"other\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.gender").value("other"));
@@ -96,14 +96,51 @@ class ProfileControllerTest {
 
     @Test
     void deleteClearsTheProfileAndGetThen404sAgain() throws Exception {
-        mockMvc.perform(post("/api/profile").contentType("application/json")
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"name\":\"Asha\",\"age\":29,\"gender\":\"female\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(delete("/api/profile"))
+        mockMvc.perform(delete("/api/profile").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true));
 
-        mockMvc.perform(get("/api/profile")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "device-1")).andExpect(status().isNotFound());
         assertThat(repository.count()).isEqualTo(0);
+    }
+
+    // ---- device isolation (see CLAUDE_CONTEXT.md's onboarding/data-isolation fix) ----
+
+    @Test
+    void requestsWithoutADeviceIdHeaderAreRejected() throws Exception {
+        mockMvc.perform(get("/api/profile"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void aFreshDeviceNeverSeesAnExistingDevicesProfile() throws Exception {
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
+                .content("{\"name\":\"Nimesh\",\"age\":25,\"gender\":\"male\"}")).andExpect(status().isOk());
+
+        // A brand-new device/install has never saved a profile of its own —
+        // it must 404 (the onboarding-required signal), never inherit
+        // device-1's profile, exactly like a real fresh install/new phone.
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "a-completely-different-device"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void anExistingDevicesProfileSurvivesAnotherDeviceOnboarding() throws Exception {
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-1").contentType("application/json")
+                .content("{\"name\":\"Nimesh\",\"age\":25,\"gender\":\"male\"}")).andExpect(status().isOk());
+
+        mockMvc.perform(post("/api/profile").header("X-Device-Id", "device-2").contentType("application/json")
+                .content("{\"name\":\"Priya\",\"age\":31,\"gender\":\"female\"}")).andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "device-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Nimesh"));
+        mockMvc.perform(get("/api/profile").header("X-Device-Id", "device-2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Priya"));
+        assertThat(repository.count()).isEqualTo(2);
     }
 }

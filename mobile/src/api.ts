@@ -1,28 +1,53 @@
-import { Platform } from 'react-native';
 import type { ActionResult, CurrentIntervention, FeedbackReason, Gender, Habit, HabitDay, UserProfile } from './types';
+import { getOrCreateDeviceId } from './deviceId';
+import { getApiBase, runBackendDiscovery } from './apiConfig';
+import { cacheGet, cacheSet } from './localCache';
 
-// The Android EMULATOR's own "localhost" is the emulator itself, not the
-// host machine running the FastAPI server — 10.0.2.2 is the documented
-// alias the emulator provides for the host's loopback.
-//
-// A REAL PHYSICAL PHONE has no such alias: it must reach the dev machine
-// over the actual network, so this constant has to be that machine's LAN
-// IP (both devices on the same Wi-Fi). Find it with:
-//   Linux/macOS: hostname -I   (or ip addr / ifconfig)
-//   Windows:     ipconfig
-// then set PHYSICAL_DEVICE_HOST below and flip USE_PHYSICAL_DEVICE_HOST to
-// true before building for a physical device.
-const USE_PHYSICAL_DEVICE_HOST = true;
-const PHYSICAL_DEVICE_HOST = '192.168.1.18'; // <-- replace with YOUR machine's LAN IP
+export { getApiBase } from './apiConfig';
 
-const HOST = USE_PHYSICAL_DEVICE_HOST
-  ? PHYSICAL_DEVICE_HOST
-  : Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
-export const API_BASE = `http://${HOST}:8899/api`;
+/** Spring Boot is an OPTIONAL online service, never a prerequisite for the
+ * app to open (see CLAUDE_CONTEXT.md's networking fix) — a `fetch()` with
+ * no timeout can hang far longer than any UI should ever wait (tens of
+ * seconds, sometimes indefinitely, when a host is simply unroutable, e.g.
+ * a stale LAN IP after the phone switches to a mobile hotspot on a
+ * different subnet). Every request aborts itself after this long instead,
+ * so failures surface fast and calling code can fall back to cached data
+ * or a clear "you're offline" state rather than hanging the whole screen. */
+const REQUEST_TIMEOUT_MS = 5000;
+
+async function timedFetch(url: string, options?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (e) {
+    // The currently-used host just failed — most likely because the
+    // network changed (new Wi-Fi, switched to/from a hotspot) and the
+    // laptop's IP moved. Kick off LAN re-discovery in the background so
+    // the *next* request has a shot at the right host; this request's own
+    // failure/cache-fallback behavior below is unaffected either way.
+    void runBackendDiscovery();
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error(`request to ${url} timed out after ${REQUEST_TIMEOUT_MS}ms (is the backend reachable?)`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Every request is scoped to this installation's anonymous device id (see
+ * deviceId.ts) — this is what keeps one device/tester from ever seeing
+ * another's profile or habits, without requiring real authentication. */
+async function deviceHeaders(): Promise<Record<string, string>> {
+  const deviceId = await getOrCreateDeviceId();
+  return { 'Content-Type': 'application/json', 'X-Device-Id': deviceId };
+}
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+  const base = await getApiBase();
+  const res = await timedFetch(`${base}${path}`, {
+    headers: await deviceHeaders(),
     ...options,
   });
   if (!res.ok) {
@@ -30,6 +55,28 @@ async function req<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error(`${options?.method || 'GET'} ${path} -> ${res.status}: ${body}`);
   }
   return res.json();
+}
+
+/**
+ * A read endpoint that mirrors its last successful response into
+ * localCache and falls back to that snapshot when the network call fails
+ * for ANY reason (timeout, DNS/connect failure, non-2xx) — this is what
+ * makes "My Challenges loads" / "Habit Detail loads" / "local progress
+ * loads" true even with Spring Boot completely unreachable. Only rethrows
+ * when there is no cached snapshot to fall back to (e.g. this exact data
+ * was never successfully fetched on this device before), since at that
+ * point there is genuinely nothing real to show.
+ */
+async function cachedReq<T>(cacheKey: string, path: string): Promise<T> {
+  try {
+    const data = await req<T>(path);
+    await cacheSet(cacheKey, data);
+    return data;
+  } catch (networkError) {
+    const cached = await cacheGet<T>(cacheKey);
+    if (cached !== null) return cached;
+    throw networkError;
+  }
 }
 
 export interface ParsedGoal {
@@ -49,11 +96,12 @@ export const api = {
   confirmHabit: (text: string, time_of_day: string) =>
     req<Habit>('/habits/confirm', { method: 'POST', body: JSON.stringify({ text, time_of_day }) }),
 
-  listHabits: () => req<Habit[]>('/habits'),
+  listHabits: () => cachedReq<Habit[]>('habits', '/habits'),
 
-  getHabitDetail: (habitId: number) => req<{ habit: Habit; days: HabitDay[] }>(`/habits/${habitId}`),
+  getHabitDetail: (habitId: number) =>
+    cachedReq<{ habit: Habit; days: HabitDay[] }>(`habitDetail:${habitId}`, `/habits/${habitId}`),
 
-  getCurrent: (habitId: number) => req<CurrentIntervention>(`/habits/${habitId}/current`),
+  getCurrent: (habitId: number) => cachedReq<CurrentIntervention>(`current:${habitId}`, `/habits/${habitId}/current`),
 
   act: (habitId: number, action: 'done' | 'snoozed' | 'missed', feedback_reason?: FeedbackReason | null) =>
     req<ActionResult>(`/habits/${habitId}/action`, {
@@ -70,18 +118,30 @@ export const api = {
 
   deleteHabit: (habitId: number) => req<{ ok: boolean }>(`/habits/${habitId}`, { method: 'DELETE' }),
 
-  /** Onboarding gate: null (not a thrown error) means "no profile saved
-   * yet" — a 404 is the expected, normal shape of a fresh install, not a
-   * failure — see App.tsx, which uses this to decide whether to show
-   * OnboardingScreen. Any other non-2xx still throws, same as `req`. */
+  /** Onboarding gate: null means either "no profile saved yet" (a 404 —
+   * the expected shape of a fresh install/new device, see App.tsx) OR
+   * "couldn't reach the backend AND nothing cached yet" — both cases must
+   * let the app proceed rather than hang, so they're deliberately not
+   * distinguished here. When a profile WAS previously cached, a network
+   * failure returns that cached profile instead (an already-onboarded
+   * device must not get bounced back to onboarding just because it's
+   * temporarily offline). */
   getProfile: async (): Promise<UserProfile | null> => {
-    const res = await fetch(`${API_BASE}/profile`);
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`GET /profile -> ${res.status}: ${body}`);
+    try {
+      const base = await getApiBase();
+      const res = await timedFetch(`${base}/profile`, { headers: await deviceHeaders() });
+      if (res.status === 404) return null;
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`GET /profile -> ${res.status}: ${body}`);
+      }
+      const profile = await res.json();
+      await cacheSet('profile', profile);
+      return profile;
+    } catch (networkError) {
+      const cached = await cacheGet<UserProfile>('profile');
+      return cached;
     }
-    return res.json();
   },
 
   saveProfile: (name: string, age: number, gender: Gender) =>

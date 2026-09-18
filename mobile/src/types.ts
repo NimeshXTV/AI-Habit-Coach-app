@@ -1,5 +1,3 @@
-export type TreeStage = 'dry' | 'recovering' | 'growing' | 'healthy' | 'thriving';
-
 export interface Habit {
   id: number;
   name: string;
@@ -9,8 +7,6 @@ export interface Habit {
   total_days: number;
   created_at: string;
   status: 'active' | 'completed' | 'stopped';
-  tree_health: number; // 0-100
-  tree_stage: TreeStage;
 }
 
 export interface HabitDay {
@@ -48,9 +44,6 @@ export interface ActionResult {
   response_kind?: string;
   generated_by?: 'strands' | 'template';
   consecutive_missed_days?: number;
-  tree_health?: number;
-  tree_stage?: TreeStage;
-  tree_comeback?: boolean;
 }
 
 export type FeedbackReason =

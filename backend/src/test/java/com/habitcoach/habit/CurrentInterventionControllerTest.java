@@ -47,7 +47,7 @@ class CurrentInterventionControllerTest {
     private ObjectMapper objectMapper;
 
     private long createHabit(String text) throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"" + text + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -66,7 +66,7 @@ class CurrentInterventionControllerTest {
     void freshHabitDay1IsEncouragementViaFallback() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.habit.id").value(id))
                 .andExpect(jsonPath("$.day_number").value(1))
@@ -82,7 +82,7 @@ class CurrentInterventionControllerTest {
     void currentEndpointRecordsInterventionOnTheDayRow() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1")).andExpect(status().isOk());
 
         HabitDay day1 = habitDayRepository.findByHabitIdAndDayNumber(id, 1).orElseThrow();
         assertThat(day1.getInterventionText()).isNotBlank();
@@ -94,7 +94,7 @@ class CurrentInterventionControllerTest {
         long id = createHabit("gym every day at 6pm");
         setDay(id, 1, DayStatus.DONE, "done", null);
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(2))
                 .andExpect(jsonPath("$.strategy").value("encouragement"));
@@ -106,7 +106,7 @@ class CurrentInterventionControllerTest {
         setDay(id, 1, DayStatus.MISSED, "missed", "no_time");
         setDay(id, 2, DayStatus.MISSED, "missed", "no_time");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(3))
                 .andExpect(jsonPath("$.strategy").value("reschedule"))
@@ -119,7 +119,7 @@ class CurrentInterventionControllerTest {
         setDay(id, 1, DayStatus.MISSED, "missed", "forgot");
         setDay(id, 2, DayStatus.MISSED, "missed", "something_came_up");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.strategy").value("reflection"));
     }
@@ -131,7 +131,7 @@ class CurrentInterventionControllerTest {
         // pending for snoozed) -> current day number stays 1.
         setDay(id, 1, DayStatus.PENDING, "snoozed", "not_feeling_it");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(1))
                 .andExpect(jsonPath("$.strategy").value("reduce_task"));
@@ -144,7 +144,7 @@ class CurrentInterventionControllerTest {
             setDay(id, d, DayStatus.DONE, "done", null);
         }
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(7))
                 .andExpect(jsonPath("$.strategy").value("reinforcement"));
@@ -159,12 +159,12 @@ class CurrentInterventionControllerTest {
         setDay(gym, 2, DayStatus.MISSED, "missed", "no_time");
         setDay(read, 1, DayStatus.DONE, "done", null);
 
-        mockMvc.perform(get("/api/habits/" + gym + "/current"))
+        mockMvc.perform(get("/api/habits/" + gym + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(3))
                 .andExpect(jsonPath("$.strategy").value("reschedule"));
 
-        mockMvc.perform(get("/api/habits/" + read + "/current"))
+        mockMvc.perform(get("/api/habits/" + read + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(2))
                 .andExpect(jsonPath("$.strategy").value("encouragement"))
@@ -180,7 +180,7 @@ class CurrentInterventionControllerTest {
         habit.setStatus(HabitStatus.COMPLETED);
         habitRepository.save(habit);
 
-        String body = mockMvc.perform(get("/api/habits/" + id + "/current"))
+        String body = mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.finished").value(true))
                 .andExpect(jsonPath("$.summary").isNotEmpty())
@@ -195,7 +195,7 @@ class CurrentInterventionControllerTest {
 
     @Test
     void unknownHabitReturns404() throws Exception {
-        mockMvc.perform(get("/api/habits/999999/current"))
+        mockMvc.perform(get("/api/habits/999999/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound());
     }
 }

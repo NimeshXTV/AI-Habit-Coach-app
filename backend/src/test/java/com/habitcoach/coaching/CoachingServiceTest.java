@@ -74,7 +74,7 @@ class CoachingServiceTest {
      */
     @Test
     void factsPayloadMatchesReferenceGoldenMaster() {
-        Habit habit = new Habit("Gym", "🏋️", "18:30", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:30", 30, 21);
         List<HabitDay> allDays = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, "encouragement"),
                 dayRow(1L, 2, DayStatus.MISSED, "missed", "no_time", 0, "encouragement"),
@@ -84,7 +84,7 @@ class CoachingServiceTest {
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenReturn(new StrandsResponse("text", "strands"));
 
-        coachingService.generateIntervention(habit, 4, allDays);
+        coachingService.generateIntervention("device-1", habit, 4, allDays);
 
         ArgumentCaptor<Map<String, Object>> factsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(strandsClient).generate(anyString(), factsCaptor.capture());
@@ -105,11 +105,11 @@ class CoachingServiceTest {
 
     @Test
     void generateInterventionUsesStrandsKeyMatchingChosenStrategy() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenReturn(new StrandsResponse("Day 1 nudge", "strands"));
 
-        InterventionResult result = coachingService.generateIntervention(habit, 1, List.of());
+        InterventionResult result = coachingService.generateIntervention("device-1", habit, 1, List.of());
 
         assertThat(result.strategy()).isEqualTo(InterventionStrategy.ENCOURAGEMENT);
         assertThat(result.text()).isEqualTo("Day 1 nudge");
@@ -119,11 +119,11 @@ class CoachingServiceTest {
 
     @Test
     void generateInterventionFallsBackToTemplateWhenStrandsUnavailable() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenThrow(new StrandsUnavailableException("connection refused", null));
 
-        InterventionResult result = coachingService.generateIntervention(habit, 1, List.of());
+        InterventionResult result = coachingService.generateIntervention("device-1", habit, 1, List.of());
 
         assertThat(result.source()).isEqualTo("template");
         assertThat(result.strategy()).isEqualTo(InterventionStrategy.ENCOURAGEMENT);
@@ -135,7 +135,7 @@ class CoachingServiceTest {
 
     @Test
     void generateSummarySuccessUsesSummaryKey() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDays = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null),
                 dayRow(1L, 2, DayStatus.MISSED, "missed", "no_time", 0, null)
@@ -152,7 +152,7 @@ class CoachingServiceTest {
 
     @Test
     void generateSummaryFallsBackToTemplateWhenStrandsUnavailable() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDays = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null)
         );
@@ -172,7 +172,7 @@ class CoachingServiceTest {
         // PENDING (per db.py's record_action), but choose_strategy must see
         // it as SNOOZED for the purposes of picking the next strategy —
         // mirrors main.py's _build_state().
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDays = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null),
                 dayRow(1L, 2, DayStatus.DONE, "done", null, 0, null),
@@ -181,7 +181,7 @@ class CoachingServiceTest {
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenReturn(new StrandsResponse("text", "strands"));
 
-        InterventionResult result = coachingService.generateIntervention(habit, 3, allDays);
+        InterventionResult result = coachingService.generateIntervention("device-1", habit, 3, allDays);
 
         // last (synthetic) day is SNOOZED with reason "other", phase for day 3
         // of 21 is getting_started -> reduce_task.
@@ -192,12 +192,12 @@ class CoachingServiceTest {
 
     @Test
     void actionResponseDoneOnDay1IsCompletionFirstAndUsesStrandsKey() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDaysAfter = List.of(dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null));
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenReturn(new StrandsResponse("Nice start!", "strands"));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 1, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 1, "done", allDaysAfter);
 
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_FIRST);
         assertThat(result.text()).isEqualTo("Nice start!");
@@ -207,7 +207,7 @@ class CoachingServiceTest {
 
     @Test
     void actionResponseDoneOnFinalDayIsCompletionFinal() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 3);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 3);
         List<HabitDay> allDaysAfter = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null),
                 dayRow(1L, 2, DayStatus.DONE, "done", null, 0, null),
@@ -215,14 +215,14 @@ class CoachingServiceTest {
         );
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 3, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 3, "done", allDaysAfter);
 
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_FINAL);
     }
 
     @Test
     void actionResponseDoneAfterPriorMissedDayIsRecovery() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDaysAfter = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null),
                 dayRow(1L, 2, DayStatus.MISSED, "missed", "no_time", 0, null),
@@ -230,46 +230,46 @@ class CoachingServiceTest {
         );
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 3, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 3, "done", allDaysAfter);
 
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_RECOVERY);
     }
 
     @Test
     void actionResponseDoneOnMilestoneDaySevenIsMilestoneNotPlain() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDaysAfter = new java.util.ArrayList<>();
         for (int d = 1; d <= 7; d++) {
             allDaysAfter.add(dayRow(1L, d, DayStatus.DONE, "done", null, 0, null));
         }
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 7, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 7, "done", allDaysAfter);
 
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_MILESTONE);
     }
 
     @Test
     void actionResponseDoneOnOrdinaryDayIsPlain() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDaysAfter = List.of(
                 dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null),
                 dayRow(1L, 2, DayStatus.DONE, "done", null, 0, null)
         );
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 2, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 2, "done", allDaysAfter);
 
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_PLAIN);
     }
 
     @Test
     void actionResponseMissedSingleVsConsecutive() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
         List<HabitDay> afterOneMiss = List.of(dayRow(1L, 1, DayStatus.MISSED, "missed", "forgot", 0, null));
-        ActionResponseResult single = coachingService.generateActionResponse(habit, 1, "missed", afterOneMiss);
+        ActionResponseResult single = coachingService.generateActionResponse("device-1", habit, 1, "missed", afterOneMiss);
         assertThat(single.kind()).isEqualTo(ResponseKind.MISS_SINGLE);
         assertThat(single.consecutiveMissed()).isEqualTo(1);
 
@@ -277,19 +277,19 @@ class CoachingServiceTest {
                 dayRow(1L, 1, DayStatus.MISSED, "missed", "forgot", 0, null),
                 dayRow(1L, 2, DayStatus.MISSED, "missed", "something_came_up", 0, null)
         );
-        ActionResponseResult consecutive = coachingService.generateActionResponse(habit, 2, "missed", afterTwoMisses);
+        ActionResponseResult consecutive = coachingService.generateActionResponse("device-1", habit, 2, "missed", afterTwoMisses);
         assertThat(consecutive.kind()).isEqualTo(ResponseKind.MISS_CONSECUTIVE);
         assertThat(consecutive.consecutiveMissed()).isEqualTo(2);
     }
 
     @Test
     void actionResponseFallsBackToTemplateWhenStrandsUnavailable() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
         List<HabitDay> allDaysAfter = List.of(dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null));
         when(strandsClient.generate(anyString(), anyMap()))
                 .thenThrow(new StrandsUnavailableException("down", null));
 
-        ActionResponseResult result = coachingService.generateActionResponse(habit, 1, "done", allDaysAfter);
+        ActionResponseResult result = coachingService.generateActionResponse("device-1", habit, 1, "done", allDaysAfter);
 
         assertThat(result.source()).isEqualTo("template");
         assertThat(result.kind()).isEqualTo(ResponseKind.COMPLETION_FIRST);
@@ -301,11 +301,11 @@ class CoachingServiceTest {
 
     @Test
     void generateInterventionOmitsProfileFactsWhenNoProfileSaved() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
-        when(profileService.getProfile()).thenReturn(Optional.empty());
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
+        when(profileService.getProfile("device-1")).thenReturn(Optional.empty());
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        coachingService.generateIntervention(habit, 1, List.of());
+        coachingService.generateIntervention("device-1", habit, 1, List.of());
 
         ArgumentCaptor<Map<String, Object>> factsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(strandsClient).generate(anyString(), factsCaptor.capture());
@@ -314,11 +314,11 @@ class CoachingServiceTest {
 
     @Test
     void generateInterventionIncludesProfileFactsWhenProfileSaved() {
-        Habit habit = new Habit("Gym", "🏋️", "18:00", 30, 21);
-        when(profileService.getProfile()).thenReturn(Optional.of(new UserProfile("Asha", 9, Gender.FEMALE)));
+        Habit habit = new Habit("device-1", "Gym", "🏋️", "18:00", 30, 21);
+        when(profileService.getProfile("device-1")).thenReturn(Optional.of(new UserProfile("device-1", "Asha", 9, Gender.FEMALE)));
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        coachingService.generateIntervention(habit, 1, List.of());
+        coachingService.generateIntervention("device-1", habit, 1, List.of());
 
         ArgumentCaptor<Map<String, Object>> factsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(strandsClient).generate(anyString(), factsCaptor.capture());
@@ -331,12 +331,12 @@ class CoachingServiceTest {
 
     @Test
     void generateActionResponseIncludesProfileFactsWhenProfileSaved() {
-        Habit habit = new Habit("Walk", "🚶", "08:00", 20, 21);
-        when(profileService.getProfile()).thenReturn(Optional.of(new UserProfile("Ravi", 68, Gender.MALE)));
+        Habit habit = new Habit("device-1", "Walk", "🚶", "08:00", 20, 21);
+        when(profileService.getProfile("device-1")).thenReturn(Optional.of(new UserProfile("device-1", "Ravi", 68, Gender.MALE)));
         List<HabitDay> allDaysAfter = List.of(dayRow(1L, 1, DayStatus.DONE, "done", null, 0, null));
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
-        coachingService.generateActionResponse(habit, 1, "done", allDaysAfter);
+        coachingService.generateActionResponse("device-1", habit, 1, "done", allDaysAfter);
 
         ArgumentCaptor<Map<String, Object>> factsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(strandsClient).generate(anyString(), factsCaptor.capture());
@@ -348,14 +348,14 @@ class CoachingServiceTest {
 
     @Test
     void ageGroupBucketsCoverChildTeenAdultAndOlderAdult() {
-        Habit habit = new Habit("Study", "📚", "16:00", 30, 21);
+        Habit habit = new Habit("device-1", "Study", "📚", "16:00", 30, 21);
         when(strandsClient.generate(anyString(), anyMap())).thenReturn(new StrandsResponse("text", "strands"));
 
         record Case(int age, String expectedGroup) {
         }
         for (Case c : List.of(new Case(8, "child"), new Case(15, "teen"), new Case(35, "adult"), new Case(70, "older_adult"))) {
-            when(profileService.getProfile()).thenReturn(Optional.of(new UserProfile("U", c.age(), Gender.OTHER)));
-            coachingService.generateIntervention(habit, 1, List.of());
+            when(profileService.getProfile("device-1")).thenReturn(Optional.of(new UserProfile("device-1", "U", c.age(), Gender.OTHER)));
+            coachingService.generateIntervention("device-1", habit, 1, List.of());
 
             ArgumentCaptor<Map<String, Object>> factsCaptor = ArgumentCaptor.forClass(Map.class);
             verify(strandsClient, org.mockito.Mockito.atLeastOnce()).generate(anyString(), factsCaptor.capture());

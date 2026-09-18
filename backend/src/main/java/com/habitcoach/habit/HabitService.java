@@ -35,34 +35,34 @@ public class HabitService {
     /** POST /api/habits — direct create, used when the goal text already
      * named an explicit time. */
     @Transactional
-    public Habit createFromText(String text) {
+    public Habit createFromText(String deviceId, String text) {
         ParsedGoal parsed = goalParser.parse(text);
-        return persist(parsed.name(), parsed.emoji(), parsed.timeOfDay(), parsed.durationMinutes(), parsed.totalDays());
+        return persist(deviceId, parsed.name(), parsed.emoji(), parsed.timeOfDay(), parsed.durationMinutes(), parsed.totalDays());
     }
 
     /** POST /api/habits/confirm — create with a user-picked time, overriding
      * whatever goal_parser guessed (used after a time_specified: false parse). */
     @Transactional
-    public Habit createConfirmed(String text, String timeOfDay) {
+    public Habit createConfirmed(String deviceId, String text, String timeOfDay) {
         if (!TIME_OF_DAY.matcher(timeOfDay).matches()) {
             throw new InvalidRequestException("time_of_day must be 'HH:MM' 24h");
         }
         ParsedGoal parsed = goalParser.parse(text);
-        return persist(parsed.name(), parsed.emoji(), timeOfDay, parsed.durationMinutes(), parsed.totalDays());
+        return persist(deviceId, parsed.name(), parsed.emoji(), timeOfDay, parsed.durationMinutes(), parsed.totalDays());
     }
 
-    private Habit persist(String name, String emoji, String timeOfDay, int durationMinutes, int totalDays) {
-        Habit habit = habitRepository.save(new Habit(name, emoji, timeOfDay, durationMinutes, totalDays));
+    private Habit persist(String deviceId, String name, String emoji, String timeOfDay, int durationMinutes, int totalDays) {
+        Habit habit = habitRepository.save(new Habit(deviceId, name, emoji, timeOfDay, durationMinutes, totalDays));
         journeyService.initializeDays(habit.getId(), totalDays);
         return habit;
     }
 
-    public List<Habit> listHabits() {
-        return habitRepository.findAllByOrderByIdDesc();
+    public List<Habit> listHabits(String deviceId) {
+        return habitRepository.findAllByDeviceIdOrderByIdDesc(deviceId);
     }
 
-    public Habit getHabit(Long id) {
-        return habitRepository.findById(id)
+    public Habit getHabit(String deviceId, Long id) {
+        return habitRepository.findByIdAndDeviceId(id, deviceId)
                 .orElseThrow(() -> new NotFoundException("habit not found"));
     }
 
@@ -75,16 +75,6 @@ public class HabitService {
         habitRepository.save(habit);
     }
 
-    /** Persists a new tree-health value computed by TreeHealth.apply() (see
-     * ActionService) — a separate method rather than folding into
-     * markCompleted() since tree health updates on every done/missed
-     * action, not just the journey-ending one. */
-    @Transactional
-    public Habit updateTreeHealth(Habit habit, int newHealth) {
-        habit.setTreeHealth(newHealth);
-        return habitRepository.save(habit);
-    }
-
     /**
      * Port of main.py's POST /api/habits/{id}/schedule (db.py's
      * update_habit_schedule). This is the ONLY way a habit's time_of_day
@@ -94,8 +84,8 @@ public class HabitService {
      * approving a suggestion) reaches this method.
      */
     @Transactional
-    public Habit updateSchedule(Long id, String timeOfDay) {
-        Habit habit = getHabit(id);
+    public Habit updateSchedule(String deviceId, Long id, String timeOfDay) {
+        Habit habit = getHabit(deviceId, id);
         if (!TIME_OF_DAY.matcher(timeOfDay).matches()) {
             throw new InvalidRequestException("time_of_day must be 'HH:MM' 24h");
         }
@@ -114,12 +104,12 @@ public class HabitService {
      * faithful port of the reference's own (slightly quirky) behavior.
      */
     @Transactional
-    public Habit continueHabit(Long id, String overrideText) {
-        Habit habit = getHabit(id);
+    public Habit continueHabit(String deviceId, Long id, String overrideText) {
+        Habit habit = getHabit(deviceId, id);
         String text = (overrideText != null && !overrideText.isBlank())
                 ? overrideText
                 : habit.getName() + " every day at " + habit.getTimeOfDay() + " for 21 days";
-        return createFromText(text);
+        return createFromText(deviceId, text);
     }
 
     /**
@@ -130,8 +120,8 @@ public class HabitService {
      * check would arguably be better.
      */
     @Transactional
-    public void stopHabit(Long id) {
-        habitRepository.findById(id).ifPresent(habit -> {
+    public void stopHabit(String deviceId, Long id) {
+        habitRepository.findByIdAndDeviceId(id, deviceId).ifPresent(habit -> {
             habit.setStatus(HabitStatus.STOPPED);
             habitRepository.save(habit);
         });
@@ -140,8 +130,8 @@ public class HabitService {
     /** Port of main.py's DELETE /api/habits/{id} (db.py's delete_habit):
      * hard delete, day rows first, then the habit itself. */
     @Transactional
-    public void deleteHabit(Long id) {
-        getHabit(id); // 404 if missing, matching the reference's explicit check
+    public void deleteHabit(String deviceId, Long id) {
+        getHabit(deviceId, id); // 404 if missing or owned by a different device
         journeyService.deleteAllDays(id);
         habitRepository.deleteById(id);
     }

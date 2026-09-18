@@ -5,13 +5,15 @@ import { cancelDailyAlarm, cancelSnoozeAlarm } from '../notifications';
 import { Blob, Dot } from '../components/decor';
 import ScreenSurface from '../components/ScreenSurface';
 import { PrimaryButton } from '../components/Button';
-import { colors, radii, shadow, spacing, treeStageColors, treeStageLabels, type } from '../theme';
+import ApiHostModal from '../components/ApiHostModal';
+import { colors, radii, shadow, spacing, type } from '../theme';
 import type { Habit, HabitDay } from '../types';
 
 /** Rotates through the app's own accent triad for each card's decorative
- * blob, same as the reference screenshot's 3 cards (yellow / coral / plum) —
- * independent of tree_stage, which drives the blob's actual color below;
- * these are only the small companion dots. */
+ * blob AND its small companion dot, same as the reference screenshot's 3
+ * cards (yellow / coral / plum) — purely decorative, tied to the card's
+ * position in the list, not to any per-habit data. */
+const BLOB_VARIANTS = [colors.accentGold, colors.primary, colors.deepPlum];
 const DOT_VARIANTS = [colors.accentGold, colors.primary, colors.deepPlum];
 
 interface Props {
@@ -34,17 +36,30 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
   const [progress, setProgress] = useState<Record<number, number>>({});
   const [busyId, setBusyId] = useState<number | null>(null);
   const [name, setName] = useState<string | null>(null);
+  const [hostModalOpen, setHostModalOpen] = useState(false);
 
+  // Tolerant of Spring Boot being unreachable throughout (see
+  // CLAUDE_CONTEXT.md's networking fix): api.listHabits()/getHabitDetail()
+  // already fall back to their last-cached snapshot on their own (see
+  // api.ts), but a habit that was created on ANOTHER device and never
+  // synced to this one yet would have no cache at all — that one entry's
+  // failure must not blank out the whole list, so each is caught
+  // individually rather than via a single Promise.all that fails whole.
   const load = useCallback(async () => {
-    const list = await api.listHabits();
+    const list = await api.listHabits().catch(() => [] as Habit[]);
     setHabits(list);
     const entries = await Promise.all(
       list.map(async (h) => {
-        const detail = await api.getHabitDetail(h.id);
-        return [h.id, dayNumberOf(detail.days, h.total_days)] as const;
+        try {
+          const detail = await api.getHabitDetail(h.id);
+          return [h.id, dayNumberOf(detail.days, h.total_days)] as const;
+        } catch {
+          return null;
+        }
       })
     );
-    setProgress(Object.fromEntries(entries));
+    const resolved = entries.filter((e): e is readonly [number, number] => e !== null);
+    setProgress(Object.fromEntries(resolved));
   }, []);
 
   useEffect(() => {
@@ -73,6 +88,8 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
         onActiveHabitIdChange(remaining.length ? remaining[0].id : null);
       }
       await load();
+    } catch {
+      Alert.alert("Couldn't reach the server", 'Deleting a challenge needs a connection to the backend. Check your connection and try again.');
     } finally {
       setBusyId(null);
     }
@@ -95,12 +112,15 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
       <View style={styles.brandRow}>
         <View style={styles.brandDot} />
         <Text style={styles.brandText}>Habit Coach</Text>
+        <TouchableOpacity onPress={() => setHostModalOpen(true)} hitSlop={10} style={styles.settingsButton}>
+          <Text style={styles.settingsButtonText}>⚙</Text>
+        </TouchableOpacity>
       </View>
+      <ApiHostModal visible={hostModalOpen} onClose={() => { setHostModalOpen(false); load(); }} />
       <Text style={styles.habitHeading}>Habit</Text>
 
       <View style={styles.greetingRow}>
         <Text style={styles.greeting} numberOfLines={1}>Hi {name ?? 'there'}!</Text>
-        <View style={styles.avatarChip} />
       </View>
 
       <ScrollView style={styles.list} contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
@@ -109,8 +129,8 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
         )}
 
         {habits.map((h, i) => {
-          const blobColor = treeStageColors[h.tree_stage];
-          const dotColor = DOT_VARIANTS[i % DOT_VARIANTS.length];
+          const blobColor = BLOB_VARIANTS[i % BLOB_VARIANTS.length];
+          const dotColor = DOT_VARIANTS[(i + 1) % DOT_VARIANTS.length];
           return (
             <TouchableOpacity
               key={h.id}
@@ -120,9 +140,9 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
               activeOpacity={0.75}
             >
               {/* Large decorative blob bleeding off the card's top-right
-                  corner, per the reference screenshot — purely decorative;
-                  its color is the only thing tied to real data (tree_stage),
-                  the actual health/stage/day info is the text below. */}
+                  corner, per the reference screenshot — purely decorative,
+                  rotates by card position; the actual day/progress info is
+                  the text below. */}
               <View style={styles.cardBlobLayer} pointerEvents="none">
                 <Blob size={132} color={blobColor} rotation={i % 2 === 0 ? -12 : 14} style={styles.cardBlobMain} />
                 <Dot size={9} color={dotColor} style={styles.cardDotA} />
@@ -143,9 +163,6 @@ export default function ChallengesScreen({ activeHabitId, onOpen, onCreateNew, o
                   <Text style={styles.cardMetaIcon}>📅</Text>
                   <Text style={styles.cardMeta}>{h.total_days} days · Day {progress[h.id] ?? '—'}</Text>
                 </View>
-                <Text style={styles.cardTreeCaption}>
-                  {treeStageLabels[h.tree_stage]} · {h.tree_health}%
-                </Text>
               </View>
             </TouchableOpacity>
           );
@@ -162,11 +179,12 @@ const styles = StyleSheet.create({
   headerBlob: { position: 'absolute', top: -60, right: -50, opacity: 0.85 },
   brandRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm },
   brandDot: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.deepPlum, marginRight: spacing.xs },
-  brandText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  brandText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600', flex: 1 },
+  settingsButton: { padding: 4 },
+  settingsButtonText: { fontSize: 15, color: colors.textMuted },
   habitHeading: { ...type.display, fontSize: 30 },
-  greetingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.sm, marginBottom: spacing.lg },
+  greetingRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm, marginBottom: spacing.lg },
   greeting: { color: colors.accentGoldDark, fontSize: 21, fontWeight: '800', flex: 1 },
-  avatarChip: { width: 36, height: 36, borderRadius: radii.sm, backgroundColor: colors.primary, ...shadow.soft },
   list: { flex: 1 },
   listContent: { paddingBottom: spacing.md },
   empty: { color: colors.textSecondary, fontSize: 14.5, marginTop: spacing.lg },
@@ -190,7 +208,6 @@ const styles = StyleSheet.create({
   cardMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.xs },
   cardMetaIcon: { fontSize: 12, marginRight: 4 },
   cardMeta: { ...type.tiny },
-  cardTreeCaption: { ...type.tiny, color: colors.textMuted, marginTop: 2, textTransform: 'capitalize' },
   deleteButton: {
     position: 'absolute', top: spacing.sm, right: spacing.sm, width: 24, height: 24, borderRadius: 12,
     backgroundColor: 'rgba(255,252,247,0.75)', alignItems: 'center', justifyContent: 'center', zIndex: 2,

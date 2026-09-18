@@ -1,18 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View,
+  ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../api';
 import {
   cancelDailyAlarm, cancelSnoozeAlarm, dismissPresentedAlarmNotifications, scheduleDailyAlarm, scheduleSnoozeAlarm,
 } from '../notifications';
 import { speakCoachMessage } from '../speech';
 import { playAlarmSequence, stopAlarmSequence } from '../audioLifecycle';
-import { fmtTime, to24h, parseTimeToDate } from '../format';
+import { fmtTime } from '../format';
 import { GhostButton, PrimaryButton } from '../components/Button';
-import { colors, radii, shadow, spacing, treeStageColors, treeStageLabels, type } from '../theme';
-import type { CurrentIntervention, FeedbackReason, Habit, HabitDay, TreeStage } from '../types';
+import TimePickerModal from '../components/TimePickerModal';
+import { colors, radii, shadow, spacing, type } from '../theme';
+import type { CurrentIntervention, FeedbackReason, Habit, HabitDay } from '../types';
 
 const REASONS: { value: FeedbackReason; label: string }[] = [
   { value: 'too_tired', label: '😴 Too tired' },
@@ -67,6 +68,17 @@ function recentWindow(days: HabitDay[], count = 7): HabitDay[] {
   return reportedDays(days).slice(-count);
 }
 
+/** Actions (done/missed/snooze/schedule/continue/stop) all write to Spring
+ * Boot and, unlike the read paths in api.ts, are deliberately NOT queued
+ * for later sync when it's unreachable — that's a materially bigger
+ * feature than "the app must still open offline" and wasn't asked for.
+ * Instead they fail fast (see api.ts's request timeout) and surface this,
+ * so the user knows to retry once back online rather than the button
+ * silently doing nothing or the screen hanging on `busy`. */
+function reportActionOffline() {
+  Alert.alert("Couldn't reach the server", 'Check your connection and try again.');
+}
+
 function greetingWord(): string {
   const hour = new Date().getHours();
   if (hour < 12) return 'Good Morning';
@@ -76,23 +88,49 @@ function greetingWord(): string {
 
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+/** Stable per-calendar-day identity (local time), used to line up a grid
+ * cell with a mapped HabitDay below. */
+function dateKey(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/**
+ * Maps each resolved (done/missed) HabitDay to the real calendar date it
+ * falls on: day 1 is the habit's creation day by construction (see backend
+ * JourneyService.initializeDays), so day N is deterministically
+ * `habit.created_at + (N-1) days` in local time. This is a derivation from
+ * real fields already on the wire (`habit.created_at`, `day.status`), not
+ * invented data — HabitDay itself still carries no calendar date of its
+ * own, this is just the app computing what that date must be from the
+ * habit's actual start date.
+ */
+function habitDayDatesByDate(habit: Habit | null, days: HabitDay[]): Map<string, 'done' | 'missed'> {
+  const map = new Map<string, 'done' | 'missed'>();
+  if (!habit) return map;
+  const start = new Date(habit.created_at);
+  start.setHours(0, 0, 0, 0);
+  for (const day of days) {
+    if (day.status !== 'done' && day.status !== 'missed') continue;
+    const d = new Date(start);
+    d.setDate(d.getDate() + (day.day_number - 1));
+    map.set(dateKey(d), day.status);
+  }
+  return map;
+}
+
 export default function HabitScreen({
   habitId, openCoachSignal, onHabitChanged, onOpenChallenges, onSignalConsumed,
 }: Props) {
   const [habit, setHabit] = useState<Habit | null>(null);
   const [days, setDays] = useState<HabitDay[]>([]);
   const [current, setCurrent] = useState<CurrentIntervention | null>(null);
-  const [response, setResponse] = useState<{
-    text: string; kind: string; treeHealth?: number; treeStage?: TreeStage; treeComeback?: boolean;
-  } | null>(null);
+  const [response, setResponse] = useState<{ text: string; kind: string } | null>(null);
   // Only "missed" asks a reason now — snooze uses an explicit duration
   // picker instead (see snoozePromptOpen).
   const [pendingAction, setPendingAction] = useState<'missed' | null>(null);
   const [selectedReason, setSelectedReason] = useState<FeedbackReason | null>(null);
   const [snoozePromptOpen, setSnoozePromptOpen] = useState(false);
   const [showTimeEditor, setShowTimeEditor] = useState(false);
-  const [pickedTime, setPickedTime] = useState(new Date());
-  const [showPicker, setShowPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   // True exactly while the app is treating this as "the alarm is ringing" —
   // set by a real scheduled-notification tap, cleared by
@@ -105,17 +143,23 @@ export default function HabitScreen({
   // not tied to any habit-day business logic.
   const [profileName, setProfileName] = useState<string | null>(null);
   const [monthOffset, setMonthOffset] = useState(0);
+  // Set only when a load() attempt fails AND there is nothing at all (not
+  // even cached) to show — see load()'s javadoc. Spring Boot being
+  // unreachable must never hang this screen on its loading spinner forever
+  // (CLAUDE_CONTEXT.md's networking fix).
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const insets = useSafeAreaInsets();
+  const pageStyle = [styles.page, { paddingTop: insets.top }];
 
   useEffect(() => {
     api.getProfile().then((p) => setProfileName(p?.name ?? null)).catch(() => setProfileName(null));
   }, []);
 
-  // Full-month grid, matching the reference design. Still visual-only for
-  // anything beyond "today" — see reportedDays()'s javadoc: HabitDay has no
-  // real calendar date per day_number, so only today can honestly be
-  // distinguished against real data. Leading/trailing days from adjacent
-  // months are included (dimmed) to fill out full weeks, same as any
-  // standard calendar grid.
+  // Full-month grid. Which real calendar dates get a done/missed marker is
+  // computed separately, in dayStatusByDate below (see habitDayDatesByDate's
+  // javadoc) — this memo only builds the grid shape itself. Leading/trailing
+  // days from adjacent months are included (dimmed) to fill out full weeks,
+  // same as any standard calendar grid.
   const monthAnchor = useMemo(() => {
     const d = new Date();
     d.setDate(1);
@@ -138,6 +182,7 @@ export default function HabitScreen({
       d.setDate(d.getDate() + i);
       return {
         key: d.toISOString(),
+        dateKey: dateKey(d),
         date: d.getDate(),
         inMonth: d.getMonth() === monthAnchor.getMonth(),
         isToday: d.getTime() === today.getTime(),
@@ -151,18 +196,39 @@ export default function HabitScreen({
     return weeks;
   }, [monthGrid]);
 
+  // Recomputes automatically on every `days` change — i.e. right after
+  // DONE/MISSED (and the auto-MISSED on a 3rd snooze), since those all flow
+  // through load()/act() setting `days` from the fresh backend response.
+  const dayStatusByDate = useMemo(() => habitDayDatesByDate(habit, days), [habit, days]);
+
+  /**
+   * Never throws — api.getHabitDetail/getCurrent already fall back to a
+   * cached snapshot when Spring Boot is unreachable (see api.ts), so this
+   * only fails when there is truly nothing (not even cached) for this
+   * habit yet, in which case loadError is set and whatever was already on
+   * screen is left alone rather than being cleared out from under the
+   * user. Every existing caller (the mount effect, act(), snooze,
+   * dismissResponse, saveTime) keeps working unchanged since none of them
+   * need to special-case a thrown error anymore.
+   */
   const load = useCallback(async (announce = false) => {
-    const detail = await api.getHabitDetail(habitId);
-    const cur = await api.getCurrent(habitId);
-    setHabit(detail.habit);
-    setDays(detail.days);
-    setCurrent(cur);
-    onHabitChanged(detail.habit);
-    if (announce && !cur.finished && cur.intervention_text) {
-      setRinging(true);
-      playAlarmSequence(cur.intervention_text); // chime, THEN (after it fully stops) speech — never both
+    try {
+      const detail = await api.getHabitDetail(habitId);
+      const cur = await api.getCurrent(habitId);
+      setHabit(detail.habit);
+      setDays(detail.days);
+      setCurrent(cur);
+      setLoadError(null);
+      onHabitChanged(detail.habit);
+      if (announce && !cur.finished && cur.intervention_text) {
+        setRinging(true);
+        playAlarmSequence(cur.intervention_text); // chime, THEN (after it fully stops) speech — never both
+      }
+      return cur;
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : 'Could not load this challenge.');
+      return null;
     }
-    return cur;
   }, [habitId, onHabitChanged]);
 
   /** STOP ALARM: silences audio and dismisses the shade notification only —
@@ -235,14 +301,13 @@ export default function HabitScreen({
       if (habit) await scheduleDailyAlarm(habit);
 
       if (res.response_text) {
-        setResponse({
-          text: res.response_text, kind: res.response_kind || action,
-          treeHealth: res.tree_health, treeStage: res.tree_stage, treeComeback: res.tree_comeback,
-        });
+        setResponse({ text: res.response_text, kind: res.response_kind || action });
         speakCoachMessage(res.response_text);
       } else {
         await load(false);
       }
+    } catch {
+      reportActionOffline();
     } finally {
       setBusy(false);
     }
@@ -280,10 +345,7 @@ export default function HabitScreen({
         const res = await api.act(habitId, 'missed');
         if (habit) await scheduleDailyAlarm(habit);
         if (res.response_text) {
-          setResponse({
-            text: res.response_text, kind: res.response_kind || 'missed',
-            treeHealth: res.tree_health, treeStage: res.tree_stage, treeComeback: res.tree_comeback,
-          });
+          setResponse({ text: res.response_text, kind: res.response_kind || 'missed' });
           speakCoachMessage(res.response_text);
         } else {
           await load(false);
@@ -298,6 +360,8 @@ export default function HabitScreen({
       // immediately regardless of the chosen duration — this is exactly the
       // "snooze fires immediately" bug; only silently refresh state.
       await load(false);
+    } catch {
+      reportActionOffline();
     } finally {
       setBusy(false);
     }
@@ -316,25 +380,52 @@ export default function HabitScreen({
       onHabitChanged(updated);
       setShowTimeEditor(false);
       await load(false);
+    } catch {
+      reportActionOffline();
     } finally {
       setBusy(false);
     }
   }
 
   async function continueJourney() {
-    const next = await api.continueHabit(habitId);
-    onHabitChanged(next);
+    try {
+      const next = await api.continueHabit(habitId);
+      onHabitChanged(next);
+    } catch {
+      reportActionOffline();
+    }
   }
   async function stopJourney() {
+    // Native alarms are cancelled locally regardless of backend
+    // reachability — only the server-side stop (soft-stop status) needs
+    // connectivity, so that part alone is what can fail here.
     await cancelDailyAlarm(habitId);
     await cancelSnoozeAlarm(habitId);
-    await api.stopHabit(habitId);
-    await load(false);
+    try {
+      await api.stopHabit(habitId);
+      await load(false);
+    } catch {
+      reportActionOffline();
+    }
   }
 
   if (!habit || !current) {
+    // loadError set + nothing cached at all — a real dead end, not just a
+    // slow network, so show that instead of spinning forever (see load()).
+    if (loadError) {
+      return (
+        <View style={pageStyle}>
+          <View style={styles.center}>
+            <Text style={styles.offlineTitle}>Couldn't load this challenge</Text>
+            <Text style={styles.offlineHint}>Check that the backend is reachable, then try again.</Text>
+            <PrimaryButton label="Try again" onPress={() => load(false)} style={styles.primaryButtonSpacing} />
+            <GhostButton label="← Go back" onPress={onOpenChallenges} />
+          </View>
+        </View>
+      );
+    }
     return (
-      <View style={styles.page}>
+      <View style={pageStyle}>
         <View style={styles.center}>
           <ActivityIndicator color={colors.primary} />
         </View>
@@ -345,16 +436,11 @@ export default function HabitScreen({
   if (response) {
     const icon = response.kind.startsWith('completion') ? '🎉' : '💛';
     return (
-      <View style={styles.page}>
+      <View style={pageStyle}>
         <View style={styles.responseWrap}>
           <View style={styles.responseCard}>
             <Text style={styles.responseIcon}>{icon}</Text>
             <Text style={styles.responseText}>{response.text}</Text>
-            {response.treeStage != null && (
-              <Text style={styles.treeText}>
-                🌳 {treeStageLabels[response.treeStage]} · {response.treeHealth}%{response.treeComeback ? '  · comeback!' : ''}
-              </Text>
-            )}
             <PrimaryButton label="Continue" onPress={dismissResponse} style={styles.responseButton} />
           </View>
         </View>
@@ -364,14 +450,10 @@ export default function HabitScreen({
 
   if (current.finished) {
     return (
-      <View style={styles.page}>
+      <View style={pageStyle}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.card}>
             <Text style={type.h1} numberOfLines={1}>{habit.emoji} {habit.name}</Text>
-            <View style={styles.finishedTreeWrap}>
-              <Text style={styles.finishedTreeEmoji}>🌳</Text>
-              <Text style={styles.treeText}>{treeStageLabels[habit.tree_stage]} · {habit.tree_health}%</Text>
-            </View>
             <Text style={styles.summaryText}>{current.summary}</Text>
             <PrimaryButton label="Start another 21 days" onPress={continueJourney} style={styles.primaryButtonSpacing} />
             <GhostButton label="Stop here" onPress={stopJourney} />
@@ -388,7 +470,7 @@ export default function HabitScreen({
   const recentDoneCount = recent.filter((d) => d.status === 'done').length;
 
   return (
-    <View style={styles.page}>
+    <View style={pageStyle}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header: greeting only. The reference shows notification/profile
             icons, but neither has a real function (no notification inbox,
@@ -403,23 +485,14 @@ export default function HabitScreen({
           <Text style={styles.greetingSubtitle}>Small steps, big results 💪</Text>
         </View>
 
-        <View style={styles.treePill}>
-          <View style={styles.treePillIconWrap}>
-            <Text style={styles.treePillIconText}>🌳</Text>
-          </View>
-          <View style={styles.treePillTextWrap}>
-            <Text style={styles.treePillLabel}>Tree: {treeStageLabels[habit.tree_stage].toLowerCase()}</Text>
-            <Text style={styles.treePillPercent}>{habit.tree_health}%</Text>
-            <View style={styles.treePillTrack}>
-              <View style={[styles.treePillFill, { width: `${habit.tree_health}%`, backgroundColor: treeStageColors[habit.tree_stage] }]} />
-            </View>
-          </View>
-        </View>
-
         {/* Full-month calendar — "<"/">" step the displayed month client-side,
-            "Today" resets it. No per-day historical data is bound to these
-            dates (see monthGrid's javadoc above) — only today is ever
-            actually highlighted against real data. */}
+            "Today" resets it. This is now the primary day-by-day progress
+            visualization (the tree pill and 21-dot row were removed): each
+            in-month date is checked against dayStatusByDate (derived from
+            real habit.created_at + day.status, see habitDayDatesByDate's
+            javadoc) and shows a green check for done / red X for missed.
+            Recomputes automatically whenever `days` changes, i.e. right
+            after any action that changes a day's status. */}
         <View style={styles.card}>
           <View style={styles.calendarHeadRow}>
             <Text style={styles.calendarMonth}>{monthLabel}</Text>
@@ -440,13 +513,33 @@ export default function HabitScreen({
           </View>
           {monthWeeks.map((week, i) => (
             <View key={i} style={styles.weekRow}>
-              {week.map((d) => (
-                <View key={d.key} style={[styles.dateCircle, !d.inMonth && styles.dateCircleOutMonth, d.isToday && styles.dateCircleToday]}>
-                  <Text style={[styles.dateCircleText, !d.inMonth && styles.dateCircleTextOutMonth, d.isToday && styles.dateCircleTextToday]}>
-                    {d.date}
-                  </Text>
-                </View>
-              ))}
+              {week.map((d) => {
+                const status = d.inMonth ? dayStatusByDate.get(d.dateKey) : undefined;
+                return (
+                  <View
+                    key={d.key}
+                    style={[
+                      styles.dateCircle,
+                      !d.inMonth && styles.dateCircleOutMonth,
+                      d.isToday && styles.dateCircleToday,
+                      status === 'done' && styles.dateCircleDone,
+                      status === 'missed' && styles.dateCircleMissed,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.dateCircleText,
+                        !d.inMonth && styles.dateCircleTextOutMonth,
+                        d.isToday && styles.dateCircleTextToday,
+                        status === 'done' && styles.dateCircleTextDone,
+                        status === 'missed' && styles.dateCircleTextMissed,
+                      ]}
+                    >
+                      {status === 'done' ? '✓' : status === 'missed' ? '✕' : d.date}
+                    </Text>
+                  </View>
+                );
+              })}
             </View>
           ))}
         </View>
@@ -464,21 +557,10 @@ export default function HabitScreen({
             </View>
             <TouchableOpacity
               style={styles.changeTimeButton}
-              onPress={() => { setPickedTime(parseTimeToDate(habit.time_of_day)); setShowTimeEditor(true); setShowPicker(Platform.OS === 'ios'); }}
+              onPress={() => setShowTimeEditor(true)}
             >
               <Text style={styles.changeTimeButtonText}>✏️ Change time</Text>
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.dots}>
-            {days.map((d) => {
-              let color: string = 'transparent';
-              let border: string = colors.surfaceCard;
-              if (d.status === 'done') { color = colors.positive; border = colors.positive; }
-              else if (d.status === 'missed') { border = colors.negative; }
-              else if (d.day_number === current.day_number) { color = colors.primary; border = colors.primary; }
-              return <View key={d.day_number} style={[styles.dot, { backgroundColor: color, borderColor: border }]} />;
-            })}
           </View>
 
           {ringing && (
@@ -494,27 +576,14 @@ export default function HabitScreen({
             </View>
           )}
 
-          {showTimeEditor && (
-            <View style={styles.timeEditorCard}>
-              <Text style={styles.timeEditorTitle}>When should we{'\n'}remind you?</Text>
-              <Text style={styles.timeEditorBigTime}>{fmtTime(to24h(pickedTime))}</Text>
-              {Platform.OS === 'android' && !showPicker && (
-                <TouchableOpacity style={styles.timeButton} onPress={() => setShowPicker(true)}>
-                  <Text style={styles.timeButtonText}>Choose time</Text>
-                </TouchableOpacity>
-              )}
-              {showPicker && (
-                <DateTimePicker
-                  value={pickedTime}
-                  mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_e, date) => { if (Platform.OS === 'android') setShowPicker(false); if (date) setPickedTime(date); }}
-                />
-              )}
-              <PrimaryButton label="Confirm time" onPress={() => saveTime(to24h(pickedTime))} loading={busy} style={styles.timeEditorConfirm} />
-              <GhostButton label="Cancel" onPress={() => setShowTimeEditor(false)} />
-            </View>
-          )}
+          <TimePickerModal
+            visible={showTimeEditor}
+            initialTime={habit.time_of_day}
+            confirmLabel="Confirm time"
+            busy={busy}
+            onCancel={() => setShowTimeEditor(false)}
+            onConfirm={(timeOfDay24h) => saveTime(timeOfDay24h)}
+          />
 
           <View style={styles.voiceLine}>
             <Text style={styles.voiceText}>🔊 {current.intervention_text}</Text>
@@ -533,7 +602,7 @@ export default function HabitScreen({
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.chipButton}
-                  onPress={() => { setPickedTime(parseTimeToDate(habit.time_of_day)); setShowTimeEditor(true); setShowPicker(Platform.OS === 'ios'); }}
+                  onPress={() => setShowTimeEditor(true)}
                 >
                   <Text style={styles.chipButtonText}>Choose another time</Text>
                 </TouchableOpacity>
@@ -633,9 +702,6 @@ export default function HabitScreen({
                 <Text style={styles.statChipLabel}>Days goal</Text>
               </View>
             </View>
-            {/* Tree health is deliberately NOT repeated here — it's already
-                shown in the tree pill above; showing it twice would be the
-                exact duplication the new design explicitly calls out to avoid. */}
             <View style={styles.statChip}>
               <Text style={styles.statChipIcon}>📊</Text>
               <View>
@@ -655,27 +721,24 @@ export default function HabitScreen({
 }
 
 const styles = StyleSheet.create({
+  // Top inset comes from useSafeAreaInsets() (see pageStyle above), applied
+  // per-render-branch since this screen has several return points
+  // (loading/response/finished/main) that all share `page` as their root.
+  // StatusBar.currentHeight was tried here previously but is unreliable
+  // under Android edge-to-edge (mobile/android/gradle.properties'
+  // edgeToEdgeEnabled=true) — react-native-safe-area-context queries the
+  // OS for the real inset instead of guessing from the status bar height.
   page: { flex: 1, backgroundColor: colors.habitPageBg },
   scrollContent: { padding: spacing.md, paddingBottom: spacing.xl },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.xl },
+  offlineTitle: { ...type.h1, fontSize: 19, textAlign: 'center', marginBottom: spacing.xs },
+  offlineHint: { ...type.small, textAlign: 'center', marginBottom: spacing.lg },
 
   headerRow: { marginBottom: spacing.md },
   greetingSmall: { ...type.h2, fontSize: 18 },
   greetingName: { ...type.display, fontSize: 28, marginTop: -4 },
   greetingUnderline: { width: 60, height: 3, backgroundColor: colors.textHeading, borderRadius: 2, marginTop: 4, marginBottom: spacing.xs },
   greetingSubtitle: { ...type.small, fontSize: 13.5 },
-
-  treePill: {
-    flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceCard, borderRadius: radii.lg,
-    padding: spacing.sm, marginBottom: spacing.md, ...shadow.soft,
-  },
-  treePillIconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceAlt, alignItems: 'center', justifyContent: 'center', marginRight: spacing.sm },
-  treePillIconText: { fontSize: 22 },
-  treePillTextWrap: { flex: 1 },
-  treePillLabel: { ...type.bodyBold, fontSize: 14, textTransform: 'capitalize' },
-  treePillPercent: { ...type.h1, fontSize: 20, marginTop: 1 },
-  treePillTrack: { height: 8, borderRadius: 4, backgroundColor: colors.surfaceAlt, marginTop: spacing.xs, overflow: 'hidden' },
-  treePillFill: { height: '100%', borderRadius: 4 },
 
   card: { backgroundColor: colors.surfaceCard, borderRadius: radii.lg, padding: spacing.md, marginBottom: spacing.md, ...shadow.soft },
   calendarHeadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
@@ -692,9 +755,13 @@ const styles = StyleSheet.create({
   },
   dateCircleOutMonth: { opacity: 0.35 },
   dateCircleToday: { backgroundColor: colors.surfaceCard, borderWidth: 1.5, borderColor: colors.textHeading },
+  dateCircleDone: { backgroundColor: colors.positiveBg },
+  dateCircleMissed: { backgroundColor: colors.negativeBg },
   dateCircleText: { ...type.small, fontWeight: '600', color: colors.textPrimary, fontSize: 12.5 },
   dateCircleTextOutMonth: { color: colors.textMuted },
   dateCircleTextToday: { fontWeight: '800' },
+  dateCircleTextDone: { color: colors.positive, fontWeight: '800' },
+  dateCircleTextMissed: { color: colors.negative, fontWeight: '800' },
 
   habitCard: { backgroundColor: colors.accentGold, borderRadius: radii.lg, padding: spacing.md, marginBottom: spacing.md, ...shadow.card },
   habitHeadRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
@@ -705,9 +772,6 @@ const styles = StyleSheet.create({
   habitMetaItem: { ...type.small, color: colors.onAccentGold, fontWeight: '700', fontSize: 12.5 },
   changeTimeButton: { borderWidth: 1.5, borderColor: colors.textHeading, borderRadius: radii.pill, paddingVertical: 6, paddingHorizontal: 12, backgroundColor: colors.surfaceCard },
   changeTimeButtonText: { color: colors.textPrimary, fontSize: 12, fontWeight: '700' },
-
-  dots: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: spacing.md },
-  dot: { width: 14, height: 14, borderRadius: 7, borderWidth: 1.5 },
 
   voiceLine: { backgroundColor: colors.surfaceCard, borderLeftWidth: 4, borderLeftColor: colors.primary, borderRadius: radii.md, padding: spacing.md, marginBottom: spacing.md },
   voiceText: { color: colors.textPrimary, fontSize: 15.5, fontWeight: '500', lineHeight: 22 },
@@ -741,12 +805,6 @@ const styles = StyleSheet.create({
   chipButtonPrimary: { backgroundColor: colors.positive, borderRadius: radii.pill, paddingVertical: 8, paddingHorizontal: 14 },
   chipButtonPrimaryText: { color: colors.onPositive, fontSize: 12.5, fontWeight: '700' },
 
-  timeEditorCard: { backgroundColor: colors.surfaceCard, borderRadius: radii.lg, padding: spacing.lg, marginBottom: spacing.md, alignItems: 'center', ...shadow.soft },
-  timeEditorTitle: { ...type.h1, fontSize: 20, textAlign: 'center', marginBottom: spacing.md },
-  timeEditorBigTime: { color: colors.primary, fontSize: 40, fontWeight: '800', marginBottom: spacing.md },
-  timeButton: { backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border, borderRadius: radii.pill, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, alignItems: 'center', marginBottom: spacing.sm },
-  timeButtonText: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
-  timeEditorConfirm: { alignSelf: 'stretch', marginTop: spacing.sm, marginBottom: spacing.xs },
 
   statsRow: { flexDirection: 'row', gap: spacing.sm },
   statsCardLeft: { flex: 1.1 },
@@ -768,15 +826,12 @@ const styles = StyleSheet.create({
   goBackButton: { alignSelf: 'center', borderWidth: 1.5, borderColor: colors.textHeading, borderRadius: radii.pill, paddingVertical: 12, paddingHorizontal: 28, marginTop: spacing.sm },
   goBackButtonText: { color: colors.textPrimary, fontWeight: '700', fontSize: 14.5 },
 
-  finishedTreeWrap: { alignItems: 'center', marginVertical: spacing.lg },
-  finishedTreeEmoji: { fontSize: 56, marginBottom: spacing.xs },
-  summaryText: { ...type.body, fontSize: 16.5, lineHeight: 24, marginBottom: spacing.md },
+  summaryText: { ...type.body, fontSize: 16.5, lineHeight: 24, marginTop: spacing.lg, marginBottom: spacing.md },
   primaryButtonSpacing: { marginTop: spacing.md, marginBottom: spacing.xs },
 
   responseWrap: { flex: 1, justifyContent: 'center', padding: spacing.lg },
   responseCard: { backgroundColor: colors.surfaceCard, borderRadius: radii.lg, padding: spacing.xl, alignItems: 'center', ...shadow.card },
   responseIcon: { fontSize: 34, marginBottom: spacing.md },
   responseText: { color: colors.textPrimary, fontSize: 18, fontWeight: '600', textAlign: 'center', lineHeight: 26, marginBottom: spacing.md },
-  treeText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700', marginBottom: spacing.lg },
   responseButton: { alignSelf: 'stretch' },
 });

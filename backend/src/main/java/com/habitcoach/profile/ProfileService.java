@@ -8,10 +8,11 @@ import java.time.Instant;
 import java.util.Optional;
 
 /**
- * Owns the single on-device profile created by onboarding (see UserProfile's
- * javadoc on why there is only ever one row). Re-running onboarding, or any
- * future "edit profile" screen, simply upserts the same row rather than
- * creating a second one.
+ * Owns the on-device profile created by onboarding, scoped by deviceId (see
+ * UserProfile's javadoc on why there is only ever one row per device).
+ * Re-running onboarding, or any future "edit profile" screen, simply
+ * upserts the same device's row rather than creating a second one for it —
+ * and never touches any other device's row.
  */
 @Service
 public class ProfileService {
@@ -22,12 +23,12 @@ public class ProfileService {
         this.repository = repository;
     }
 
-    public Optional<UserProfile> getProfile() {
-        return repository.findTopByOrderByIdAsc();
+    public Optional<UserProfile> getProfile(String deviceId) {
+        return repository.findTopByDeviceIdOrderByIdAsc(deviceId);
     }
 
     @Transactional
-    public UserProfile saveProfile(String name, Integer age, Gender gender) {
+    public UserProfile saveProfile(String deviceId, String name, Integer age, Gender gender) {
         if (name == null || name.isBlank()) {
             throw new InvalidRequestException("name must not be blank");
         }
@@ -38,7 +39,8 @@ public class ProfileService {
             throw new InvalidRequestException("gender is required");
         }
 
-        UserProfile profile = repository.findTopByOrderByIdAsc().orElseGet(() -> new UserProfile(name, age, gender));
+        UserProfile profile = repository.findTopByDeviceIdOrderByIdAsc(deviceId)
+                .orElseGet(() -> new UserProfile(deviceId, name, age, gender));
         profile.setName(name.trim());
         profile.setAge(age);
         profile.setGender(gender);
@@ -46,13 +48,12 @@ public class ProfileService {
         return repository.save(profile);
     }
 
-    /** Clears the profile back to "no profile yet" — GET /api/profile will
-     * 404 again afterward, which is what makes onboarding show again on the
-     * mobile app's next launch (see App.tsx). Deletes all rows rather than
-     * just the one findTopByOrderByIdAsc() would return, as defensive
-     * cleanup in case more than one ever exists. */
+    /** Clears this device's profile back to "no profile yet" — GET
+     * /api/profile will 404 again afterward for this same deviceId, which
+     * is what makes onboarding show again on the mobile app's next launch
+     * (see App.tsx). Never touches another device's row. */
     @Transactional
-    public void deleteProfile() {
-        repository.deleteAll();
+    public void deleteProfile(String deviceId) {
+        repository.deleteByDeviceId(deviceId);
     }
 }

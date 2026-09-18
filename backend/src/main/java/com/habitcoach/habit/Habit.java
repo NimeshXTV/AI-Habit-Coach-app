@@ -26,6 +26,20 @@ public class Habit {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /** Anonymous per-installation owner (see mobile's deviceId.ts,
+     * profile.UserProfile's javadoc for the same pattern) — every
+     * repository/service/controller method that touches a Habit is scoped
+     * by this, which is what stops a fresh install/different device from
+     * ever listing or opening another device's challenges. @ColumnDefault
+     * is required (not cosmetic): adding a NOT NULL column via
+     * ddl-auto=update against an existing, non-empty habits table fails
+     * without a DB-level default to backfill existing rows with; any
+     * pre-existing row is attributed to this fixed sentinel device id
+     * rather than being deleted or silently shared. */
+    @Column(name = "device_id", nullable = false)
+    @ColumnDefault("'legacy-device'")
+    private String deviceId;
+
     @Column(nullable = false)
     private String name;
 
@@ -48,24 +62,12 @@ public class Habit {
     @Column(nullable = false, length = 20)
     private HabitStatus status = HabitStatus.ACTIVE;
 
-    /** Habit-tree gamification (see TreeHealth) — one tree per habit, not a
-     * separate table: kept directly on Habit per the product requirement to
-     * avoid unnecessary architecture for what is just one extra int.
-     * @ColumnDefault is required, not cosmetic: without a DB-level default,
-     * Hibernate's `ddl-auto=update` ALTER TABLE ADD COLUMN ... NOT NULL
-     * fails outright against an existing, non-empty habits table (verified
-     * against a copy of the real dev DB) — H2 has no value to backfill
-     * existing rows with otherwise. Kept in sync with TreeHealth.SEED by
-     * TreeHealthTest.seedMatchesHabitsColumnDefault(). */
-    @Column(name = "tree_health", nullable = false)
-    @ColumnDefault("50")
-    private Integer treeHealth = TreeHealth.SEED;
-
     protected Habit() {
         // JPA
     }
 
-    public Habit(String name, String emoji, String timeOfDay, Integer durationMinutes, Integer totalDays) {
+    public Habit(String deviceId, String name, String emoji, String timeOfDay, Integer durationMinutes, Integer totalDays) {
+        this.deviceId = deviceId;
         this.name = name;
         this.emoji = emoji;
         this.timeOfDay = timeOfDay;
@@ -75,6 +77,10 @@ public class Habit {
 
     public Long getId() {
         return id;
+    }
+
+    public String getDeviceId() {
+        return deviceId;
     }
 
     public String getName() {
@@ -127,21 +133,5 @@ public class Habit {
 
     public void setStatus(HabitStatus status) {
         this.status = status;
-    }
-
-    public Integer getTreeHealth() {
-        return treeHealth;
-    }
-
-    public void setTreeHealth(Integer treeHealth) {
-        this.treeHealth = treeHealth;
-    }
-
-    /** Computed, not persisted (no backing field -> JPA's field-based access
-     * ignores it entirely) — always in sync with treeHealth by construction.
-     * Serializes as "tree_stage" alongside "tree_health" on every response
-     * that already embeds a Habit (list, detail, current, action, ...). */
-    public TreeStage getTreeStage() {
-        return TreeStage.of(treeHealth);
     }
 }

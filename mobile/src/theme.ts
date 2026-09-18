@@ -56,28 +56,6 @@ export const colors = {
   habitPageBg: '#F8D999',
 } as const;
 
-/** Tree-stage palette (see habit tree gamification) — deliberately reuses
- * the app's own gold/coral/plum triad plus a muted tan for "dry" rather
- * than introducing an off-palette color like green. Progresses from
- * pale/muted through vivid to deep/rich as health climbs. Business logic
- * (which stage a health value maps to) lives entirely in the backend
- * (habit.TreeStage) — this is a rendering-only lookup. */
-export const treeStageColors: Record<'dry' | 'recovering' | 'growing' | 'healthy' | 'thriving', string> = {
-  dry: '#C7B299',
-  recovering: '#F7C548',
-  growing: '#F2935A',
-  healthy: '#EA6C42',
-  thriving: '#3B2740',
-};
-
-export const treeStageLabels: Record<'dry' | 'recovering' | 'growing' | 'healthy' | 'thriving', string> = {
-  dry: 'Dry',
-  recovering: 'Recovering',
-  growing: 'Growing',
-  healthy: 'Healthy',
-  thriving: 'Thriving',
-};
-
 export const radii = {
   sm: 10,
   md: 16,

@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { api } from '../api';
 import { Blob, ContourLines } from '../components/decor';
 import ScreenSurface from '../components/ScreenSurface';
 import { ChipButton, GhostButton, PrimaryButton } from '../components/Button';
+import ApiHostModal from '../components/ApiHostModal';
 import { colors, radii, spacing, type } from '../theme';
 import type { Gender } from '../types';
 
@@ -13,6 +14,15 @@ import type { Gender } from '../types';
  * language matches the Welcome/My Challenges reference screenshots; kept
  * functionally identical to the previous plain version (same api.saveProfile
  * call, same validation), only the presentation changed.
+ *
+ * The ⚙ button (every step) opens the same ApiHostModal ChallengesScreen
+ * uses. It has to be reachable from here too: apiConfig.ts's default host
+ * (10.0.2.2) is the Android EMULATOR's loopback alias and is meaningless on
+ * a real phone, and ChallengesScreen — the only other place that modal was
+ * previously reachable from — only renders AFTER onboarding completes. Without
+ * this, a fresh physical-device install has no way to point the app at the
+ * dev machine's real LAN IP before `finish()` below needs a working
+ * connection, so profile creation always fails with a network error first.
  */
 type Step = 'welcome' | 'name' | 'age' | 'gender';
 
@@ -33,6 +43,18 @@ export default function OnboardingScreen({ onDone }: Props) {
   const [gender, setGender] = useState<Gender | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hostModalOpen, setHostModalOpen] = useState(false);
+
+  const settingsButton = (
+    <TouchableOpacity
+      onPress={() => setHostModalOpen(true)}
+      hitSlop={10}
+      style={styles.settingsButton}
+      accessibilityLabel="Server settings"
+    >
+      <Text style={styles.settingsButtonText}>⚙</Text>
+    </TouchableOpacity>
+  );
 
   async function finish() {
     if (!gender) return;
@@ -61,6 +83,8 @@ export default function OnboardingScreen({ onDone }: Props) {
           </>
         }
       >
+        <View style={styles.settingsRow}>{settingsButton}</View>
+        <ApiHostModal visible={hostModalOpen} onClose={() => setHostModalOpen(false)} />
         <View style={styles.welcomeSpacerTop} />
         <View style={styles.welcomeTextBlock}>
           <Text style={type.display}>Welcome</Text>
@@ -81,6 +105,8 @@ export default function OnboardingScreen({ onDone }: Props) {
         </>
       }
     >
+      <View style={styles.settingsRow}>{settingsButton}</View>
+      <ApiHostModal visible={hostModalOpen} onClose={() => setHostModalOpen(false)} />
       <View style={styles.stepSpacerTop} />
 
       {step === 'name' && (
@@ -151,6 +177,10 @@ export default function OnboardingScreen({ onDone }: Props) {
 }
 
 const styles = StyleSheet.create({
+  settingsRow: { flexDirection: 'row', justifyContent: 'flex-end' },
+  settingsButton: { padding: 4 },
+  settingsButtonText: { fontSize: 15, color: colors.textMuted },
+
   welcomeSpacerTop: { flex: 1.1 },
   welcomeSpacerBottom: { flex: 1 },
   welcomeTextBlock: { marginBottom: spacing.xl },

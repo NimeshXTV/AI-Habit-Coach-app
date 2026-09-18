@@ -33,7 +33,7 @@ class ScheduleControllerTest {
     private ObjectMapper objectMapper;
 
     private long createHabit(String text) throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"" + text + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -44,7 +44,7 @@ class ScheduleControllerTest {
     void validRescheduleReturnsUpdatedHabit() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"19:30\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(id))
@@ -56,14 +56,14 @@ class ScheduleControllerTest {
     void authoritativeTimeIsReflectedInSubsequentGets() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"time_of_day\":\"07:00\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.habit.time_of_day").value("07:00"));
 
-        mockMvc.perform(get("/api/habits"))
+        mockMvc.perform(get("/api/habits").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].time_of_day").value("07:00"));
     }
@@ -72,12 +72,12 @@ class ScheduleControllerTest {
     void malformedTimeReturns400AndLeavesScheduleUnchanged() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"7:30pm\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("time_of_day must be 'HH:MM' 24h"));
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("18:00"));
     }
 
@@ -85,7 +85,7 @@ class ScheduleControllerTest {
     void outOfRangeTimeReturns400() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"25:61\"}"))
                 .andExpect(status().isBadRequest());
     }
@@ -94,14 +94,14 @@ class ScheduleControllerTest {
     void missingTimeOfDayFieldReturns400() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void unknownHabitReturns404() throws Exception {
-        mockMvc.perform(post("/api/habits/999999/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/999999/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"09:00\"}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("habit not found"));
@@ -112,12 +112,12 @@ class ScheduleControllerTest {
         long gym = createHabit("gym every day at 6pm");
         long read = createHabit("read every night for 14 days");
 
-        mockMvc.perform(post("/api/habits/" + gym + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + gym + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"time_of_day\":\"05:30\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/habits/" + gym))
+        mockMvc.perform(get("/api/habits/" + gym).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("05:30"));
-        mockMvc.perform(get("/api/habits/" + read))
+        mockMvc.perform(get("/api/habits/" + read).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("21:00"));
     }
 }

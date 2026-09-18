@@ -6,8 +6,10 @@ import java.util.Optional;
 
 public interface UserProfileRepository extends JpaRepository<UserProfile, Long> {
 
-    /** There is at most one profile (no auth, single local device — see
-     * UserProfile's javadoc); the oldest row is always THE profile, in the
-     * unlikely event more than one ever exists. */
-    Optional<UserProfile> findTopByOrderByIdAsc();
+    /** There is at most one profile PER deviceId (see UserProfile's
+     * javadoc); the oldest row for that device is always THE profile, in
+     * the unlikely event more than one ever exists for it. */
+    Optional<UserProfile> findTopByDeviceIdOrderByIdAsc(String deviceId);
+
+    void deleteByDeviceId(String deviceId);
 }

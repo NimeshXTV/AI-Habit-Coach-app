@@ -33,7 +33,7 @@ class ActionControllerTest {
     private ObjectMapper objectMapper;
 
     private long createHabit(String text) throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"" + text + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -44,7 +44,7 @@ class ActionControllerTest {
     void doneReturnsCompletionResponseShape() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"done\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true))
@@ -59,7 +59,7 @@ class ActionControllerTest {
     void snoozedReturnsBareShapeWithNoResponseFields() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"snoozed\",\"feedback_reason\":\"not_feeling_it\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true))
@@ -74,20 +74,20 @@ class ActionControllerTest {
     void snoozeThenCurrentShowsShrunkTaskViaEscalatingSnoozeCount() throws Exception {
         long id = createHabit("gym every day at 6pm"); // 30-minute default duration
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"action\":\"snoozed\",\"feedback_reason\":\"not_feeling_it\"}")).andExpect(status().isOk());
 
         // 1st snooze: attempts=1 -> shrink = max(5, 30/(2+1)) = 10
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.strategy").value("reduce_task"))
                 .andExpect(jsonPath("$.intervention_text").value(org.hamcrest.Matchers.containsString("10 minutes")));
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"action\":\"snoozed\",\"feedback_reason\":\"not_feeling_it\"}")).andExpect(status().isOk());
 
         // 2nd snooze same day: attempts=2 -> shrink = max(5, 30/(2+2)) = 7
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.strategy").value("reduce_task"))
                 .andExpect(jsonPath("$.intervention_text").value(org.hamcrest.Matchers.containsString("7 minutes")));
@@ -97,7 +97,7 @@ class ActionControllerTest {
     void missedRecordsFeedbackAndReturnsMissSingle() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"missed\",\"feedback_reason\":\"too_tired\",\"feedback_note\":\"long day\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.response_kind").value("miss_single"))
@@ -108,10 +108,10 @@ class ActionControllerTest {
     void twoConsecutiveMissesReturnMissConsecutiveOnSecond() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"action\":\"missed\",\"feedback_reason\":\"forgot\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"missed\",\"feedback_reason\":\"something_came_up\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.response_kind").value("miss_consecutive"))
@@ -122,7 +122,7 @@ class ActionControllerTest {
     void invalidActionReturns400() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"finished\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("action must be done | snoozed | missed"));
@@ -132,7 +132,7 @@ class ActionControllerTest {
     void invalidFeedbackReasonReturns400() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"missed\",\"feedback_reason\":\"excuses\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value(
@@ -143,14 +143,14 @@ class ActionControllerTest {
     void missingActionFieldReturns400() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
     }
 
     @Test
     void unknownHabitReturns404() throws Exception {
-        mockMvc.perform(post("/api/habits/999999/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/999999/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"done\"}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("habit not found"));
@@ -160,15 +160,15 @@ class ActionControllerTest {
     void doneOnFinalDayCompletesHabitAndSubsequentCurrentReturnsFinishedSummary() throws Exception {
         long id = createHabit("read every night for 2 days");
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"action\":\"done\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/habits/" + id + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"done\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.response_kind").value("completion_final"));
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.finished").value(true))
                 .andExpect(jsonPath("$.summary").isNotEmpty());
@@ -179,20 +179,20 @@ class ActionControllerTest {
         long gym = createHabit("gym every day at 6pm");
         long read = createHabit("read every night for 14 days");
 
-        mockMvc.perform(post("/api/habits/" + gym + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + gym + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"done\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(1));
 
-        mockMvc.perform(post("/api/habits/" + read + "/action").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + read + "/action").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"action\":\"missed\",\"feedback_reason\":\"no_time\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.day_number").value(1))
                 .andExpect(jsonPath("$.response_kind").value("miss_single"));
 
-        mockMvc.perform(get("/api/habits/" + gym + "/current"))
+        mockMvc.perform(get("/api/habits/" + gym + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.day_number").value(2));
-        mockMvc.perform(get("/api/habits/" + read + "/current"))
+        mockMvc.perform(get("/api/habits/" + read + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.day_number").value(2));
     }
 }

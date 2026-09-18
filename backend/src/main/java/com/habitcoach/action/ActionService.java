@@ -3,11 +3,8 @@ package com.habitcoach.action;
 import com.habitcoach.coaching.ActionResponseResult;
 import com.habitcoach.coaching.CoachingService;
 import com.habitcoach.coaching.FeedbackLabels;
-import com.habitcoach.coaching.ResponseKind;
 import com.habitcoach.habit.Habit;
 import com.habitcoach.habit.HabitService;
-import com.habitcoach.habit.TreeHealth;
-import com.habitcoach.habit.TreeStage;
 import com.habitcoach.journey.HabitDay;
 import com.habitcoach.journey.JourneyService;
 import com.habitcoach.web.InvalidRequestException;
@@ -48,8 +45,8 @@ public class ActionService {
     }
 
     @Transactional
-    public ActionResult recordAction(Long habitId, String action, String feedbackReason, String feedbackNote) {
-        Habit habit = habitService.getHabit(habitId); // throws NotFoundException if missing
+    public ActionResult recordAction(String deviceId, Long habitId, String action, String feedbackReason, String feedbackNote) {
+        Habit habit = habitService.getHabit(deviceId, habitId); // throws NotFoundException if missing or owned by a different device
 
         if (action == null || !VALID_ACTIONS.contains(action)) {
             throw new InvalidRequestException("action must be done | snoozed | missed");
@@ -69,18 +66,10 @@ public class ActionService {
 
         if ("done".equals(action) || "missed".equals(action)) {
             List<HabitDay> daysAfter = journeyService.getDays(habitId);
-            ActionResponseResult response = coachingService.generateActionResponse(habit, dayNumber, action, daysAfter);
-
-            // Tree gamification (see TreeHealth): only a real done/missed
-            // waters or dries the tree — "snoozed" never reaches this branch
-            // at all, so it can never touch tree health, by construction.
-            int newHealth = TreeHealth.apply(habit.getTreeHealth(), action);
-            habitService.updateTreeHealth(habit, newHealth);
-            boolean comeback = response.kind() == ResponseKind.COMPLETION_RECOVERY;
+            ActionResponseResult response = coachingService.generateActionResponse(deviceId, habit, dayNumber, action, daysAfter);
 
             return ActionResult.withResponse(dayNumber, response.text(), response.kind().toJson(),
-                    response.source(), response.consecutiveMissed(),
-                    newHealth, TreeStage.of(newHealth).toJson(), comeback);
+                    response.source(), response.consecutiveMissed());
         }
 
         return ActionResult.simple(dayNumber);

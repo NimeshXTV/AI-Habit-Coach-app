@@ -35,10 +35,10 @@ public class CoachingService {
         this.profileService = profileService;
     }
 
-    public InterventionResult generateIntervention(Habit habit, int dayNumber, List<HabitDay> allDays) {
+    public InterventionResult generateIntervention(String deviceId, Habit habit, int dayNumber, List<HabitDay> allDays) {
         List<DaySnapshot> history = buildHistory(dayNumber, allDays);
         InterventionStrategy strategy = StrategySelector.choose(dayNumber, habit.getTotalDays(), history);
-        Map<String, Object> facts = buildFacts(habit, dayNumber, history);
+        Map<String, Object> facts = buildFacts(deviceId, habit, dayNumber, history);
 
         try {
             StrandsResponse response = strandsClient.generate(strategy.toJson(), facts);
@@ -76,7 +76,7 @@ public class CoachingService {
      * today, not the situation walking into today. Never called for
      * "snoozed" (the next /current call already covers that case).
      */
-    public ActionResponseResult generateActionResponse(Habit habit, int dayNumber, String action,
+    public ActionResponseResult generateActionResponse(String deviceId, Habit habit, int dayNumber, String action,
                                                          List<HabitDay> allDaysAfter) {
         int completed = (int) allDaysAfter.stream().filter(d -> d.getStatus() == DayStatus.DONE).count();
         List<DaySnapshot> allSnapshots = allDaysAfter.stream().map(DaySnapshot::from).toList();
@@ -112,7 +112,7 @@ public class CoachingService {
         facts.put("current_streak", StrategySelector.currentStreak(allSnapshots));
         facts.put("consecutive_missed", consecutiveMissed);
         facts.put("reason", FeedbackLabels.labelOrDefault(thisDay != null ? thisDay.getFeedbackReason() : null, ""));
-        addProfileFacts(facts);
+        addProfileFacts(deviceId, facts);
 
         try {
             StrandsResponse response = strandsClient.generate(kind.toJson(), facts);
@@ -150,7 +150,7 @@ public class CoachingService {
         return history;
     }
 
-    private Map<String, Object> buildFacts(Habit habit, int dayNumber, List<DaySnapshot> history) {
+    private Map<String, Object> buildFacts(String deviceId, Habit habit, int dayNumber, List<DaySnapshot> history) {
         DaySnapshot lastDay = history.isEmpty() ? null : history.get(history.size() - 1);
         int completed = (int) history.stream().filter(d -> d.status() == DayStatus.DONE).count();
 
@@ -168,7 +168,7 @@ public class CoachingService {
         facts.put("snooze_count_today", lastDay != null && lastDay.snoozeCount() != null ? lastDay.snoozeCount() : 0);
         facts.put("last_strategy", lastDay != null && lastDay.interventionStrategy() != null
                 ? lastDay.interventionStrategy() : "none");
-        addProfileFacts(facts);
+        addProfileFacts(deviceId, facts);
         return facts;
     }
 
@@ -186,8 +186,8 @@ public class CoachingService {
      * AI (per the SYSTEM_PROMPT's explicit no-stereotyping instruction), not
      * something this deterministic layer should decide.
      */
-    private void addProfileFacts(Map<String, Object> facts) {
-        profileService.getProfile().ifPresent(profile -> {
+    private void addProfileFacts(String deviceId, Map<String, Object> facts) {
+        profileService.getProfile(deviceId).ifPresent(profile -> {
             facts.put("user_name", profile.getName());
             facts.put("user_age", profile.getAge());
             facts.put("age_group", AgeGroup.of(profile.getAge()).toJson());

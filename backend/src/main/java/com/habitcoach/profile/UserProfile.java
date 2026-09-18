@@ -8,14 +8,26 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.ColumnDefault;
 
 import java.time.Instant;
 
 /**
- * The app has no authentication (by design — see CLAUDE_CONTEXT.md §9), so
- * this is a single-row, local-device profile: at most one UserProfile ever
- * exists, created/updated by the onboarding flow (see ProfileService). It
- * is never habit-scoped — one profile informs coaching for every habit.
+ * The app has no real authentication (by design — see CLAUDE_CONTEXT.md
+ * §9); instead every profile is scoped to an anonymous per-installation
+ * deviceId (see mobile's deviceId.ts, sent as the X-Device-Id header and
+ * threaded through by ProfileController/ProfileService). At most one
+ * UserProfile ever exists PER deviceId — this is what stops a fresh
+ * install/new device from ever seeing another device's onboarding data. It
+ * is never habit-scoped beyond that — one profile informs coaching for
+ * every habit belonging to the same device.
+ *
+ * @ColumnDefault is required (not cosmetic): adding a NOT NULL column via
+ * ddl-auto=update against an existing, non-empty user_profile table fails
+ * without a DB-level default to backfill existing rows with. Any
+ * pre-existing row (saved before device-scoping existed) is attributed to
+ * this fixed sentinel device id rather than being deleted or silently
+ * merged into a real device's data.
  */
 @Entity
 @Table(name = "user_profile")
@@ -24,6 +36,10 @@ public class UserProfile {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(name = "device_id", nullable = false)
+    @ColumnDefault("'legacy-device'")
+    private String deviceId;
 
     @Column(nullable = false)
     private String name;
@@ -45,7 +61,8 @@ public class UserProfile {
         // JPA
     }
 
-    public UserProfile(String name, Integer age, Gender gender) {
+    public UserProfile(String deviceId, String name, Integer age, Gender gender) {
+        this.deviceId = deviceId;
         this.name = name;
         this.age = age;
         this.gender = gender;
@@ -53,6 +70,10 @@ public class UserProfile {
 
     public Long getId() {
         return id;
+    }
+
+    public String getDeviceId() {
+        return deviceId;
     }
 
     public String getName() {

@@ -35,7 +35,7 @@ class HabitLifecycleControllerTest {
     private ObjectMapper objectMapper;
 
     private long createHabit(String text) throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"" + text + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -46,7 +46,7 @@ class HabitLifecycleControllerTest {
     void continueWithNoBodyCreatesFreshHabitFromSameNameAndTime() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/continue"))
+        mockMvc.perform(post("/api/habits/" + id + "/continue").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(org.hamcrest.Matchers.not(id)))
                 .andExpect(jsonPath("$.name").value("Gym"))
@@ -57,7 +57,7 @@ class HabitLifecycleControllerTest {
 
     @Test
     void continueUnknownHabitReturns404() throws Exception {
-        mockMvc.perform(post("/api/habits/999999/continue"))
+        mockMvc.perform(post("/api/habits/999999/continue").header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound());
     }
 
@@ -65,20 +65,20 @@ class HabitLifecycleControllerTest {
     void stopReturnsOkAndHabitDetailReflectsStoppedStatus() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(post("/api/habits/" + id + "/stop"))
+        mockMvc.perform(post("/api/habits/" + id + "/stop").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true));
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.status").value("stopped"));
     }
 
     @Test
     void stoppedHabitCurrentReturnsFinishedSummaryShape() throws Exception {
         long id = createHabit("gym every day at 6pm");
-        mockMvc.perform(post("/api/habits/" + id + "/stop")).andExpect(status().isOk());
+        mockMvc.perform(post("/api/habits/" + id + "/stop").header("X-Device-Id", "device-1")).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.finished").value(true))
                 .andExpect(jsonPath("$.summary").isNotEmpty());
@@ -88,17 +88,17 @@ class HabitLifecycleControllerTest {
     void deleteRemovesHabitAndSubsequentGetIs404() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(delete("/api/habits/" + id))
+        mockMvc.perform(delete("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.ok").value(true));
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void deleteUnknownHabitReturns404() throws Exception {
-        mockMvc.perform(delete("/api/habits/999999"))
+        mockMvc.perform(delete("/api/habits/999999").header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("habit not found"));
     }
@@ -108,15 +108,15 @@ class HabitLifecycleControllerTest {
         long gym = createHabit("gym every day at 6pm");
         long read = createHabit("read every night for 14 days");
 
-        mockMvc.perform(delete("/api/habits/" + gym)).andExpect(status().isOk());
+        mockMvc.perform(delete("/api/habits/" + gym).header("X-Device-Id", "device-1")).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/habits/" + gym)).andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/habits/" + read))
+        mockMvc.perform(get("/api/habits/" + gym).header("X-Device-Id", "device-1")).andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/habits/" + read).header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.habit.id").value(read))
                 .andExpect(jsonPath("$.days", org.hamcrest.Matchers.hasSize(14)));
 
-        mockMvc.perform(get("/api/habits"))
+        mockMvc.perform(get("/api/habits").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(1)))
                 .andExpect(jsonPath("$[0].id").value(read));
     }

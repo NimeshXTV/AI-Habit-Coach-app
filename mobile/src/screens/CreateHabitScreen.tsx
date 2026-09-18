@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 import { api, ParsedGoal } from '../api';
-import { fmtTime, to24h, parseTimeToDate } from '../format';
 import { Blob, ContourLines } from '../components/decor';
 import ScreenSurface from '../components/ScreenSurface';
 import { GhostButton, PrimaryButton } from '../components/Button';
+import TimePickerModal from '../components/TimePickerModal';
 import { colors, radii, spacing, type } from '../theme';
 import type { Habit } from '../types';
 
@@ -20,8 +19,14 @@ export default function CreateHabitScreen({ onCreated, onCancel }: Props) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [askingTime, setAskingTime] = useState<ParsedGoal | null>(null);
-  const [pickedTime, setPickedTime] = useState<Date>(new Date());
-  const [showPicker, setShowPicker] = useState(Platform.OS === 'ios');
+
+  // Creating a challenge genuinely needs the backend (AI goal parsing) —
+  // there is no local fallback for that, unlike viewing existing
+  // challenges/progress. A failure here (e.g. Spring Boot unreachable)
+  // should surface a clear message rather than an unhandled rejection.
+  function reportCreateOffline() {
+    Alert.alert("Couldn't reach the server", 'Creating a new challenge needs a connection to the backend. Check your connection and try again.');
+  }
 
   async function handleStart() {
     const trimmed = text.trim();
@@ -33,20 +38,23 @@ export default function CreateHabitScreen({ onCreated, onCancel }: Props) {
         const habit = await api.createHabit(trimmed);
         onCreated(habit);
       } else {
-        setPickedTime(parseTimeToDate(parsed.time_of_day));
         setAskingTime(parsed);
       }
+    } catch {
+      reportCreateOffline();
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleConfirmTime() {
+  async function handleConfirmTime(timeOfDay24h: string) {
     if (!askingTime) return;
     setBusy(true);
     try {
-      const habit = await api.confirmHabit(text.trim(), to24h(pickedTime));
+      const habit = await api.confirmHabit(text.trim(), timeOfDay24h);
       onCreated(habit);
+    } catch {
+      reportCreateOffline();
     } finally {
       setBusy(false);
     }
@@ -58,40 +66,6 @@ export default function CreateHabitScreen({ onCreated, onCancel }: Props) {
       <ContourLines style={styles.contours} />
     </>
   );
-
-  if (askingTime) {
-    return (
-      <ScreenSurface decorations={decorations}>
-        <Text style={styles.timeTitle}>When should we{'\n'}remind you?</Text>
-        <Text style={styles.timeSubtitle}>for {askingTime.name.toLowerCase()}</Text>
-        <View style={styles.timeCard}>
-          <Text style={styles.bigTime}>{fmtTime(to24h(pickedTime))}</Text>
-          {Platform.OS === 'android' && !showPicker && (
-            <TouchableOpacity style={styles.timeButton} onPress={() => setShowPicker(true)}>
-              <Text style={styles.timeButtonText}>Choose time</Text>
-            </TouchableOpacity>
-          )}
-          {showPicker && (
-            <DateTimePicker
-              value={pickedTime}
-              mode="time"
-              is24Hour={false}
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(_event, date) => {
-                if (Platform.OS === 'android') setShowPicker(false);
-                if (date) setPickedTime(date);
-              }}
-            />
-          )}
-        </View>
-        <Text style={styles.hint}>
-          We couldn't find a specific time in what you typed — this is what the alarm and voice coaching will use.
-        </Text>
-        <PrimaryButton label="Confirm time" onPress={handleConfirmTime} loading={busy} style={styles.primaryButtonSpacing} />
-        <GhostButton label="Cancel" onPress={() => setAskingTime(null)} />
-      </ScreenSurface>
-    );
-  }
 
   return (
     <ScreenSurface decorations={decorations}>
@@ -108,6 +82,16 @@ export default function CreateHabitScreen({ onCreated, onCancel }: Props) {
       />
       <PrimaryButton label="Start" onPress={handleStart} disabled={!text.trim()} loading={busy} style={styles.primaryButtonSpacing} />
       {onCancel && <GhostButton label="Cancel" onPress={onCancel} />}
+
+      <TimePickerModal
+        visible={!!askingTime}
+        initialTime={askingTime?.time_of_day ?? '08:00'}
+        subtitle={askingTime ? `for ${askingTime.name.toLowerCase()}` : undefined}
+        hint="We couldn't find a specific time in what you typed — this is what the alarm and voice coaching will use."
+        busy={busy}
+        onCancel={() => setAskingTime(null)}
+        onConfirm={handleConfirmTime}
+      />
     </ScreenSurface>
   );
 }
@@ -121,15 +105,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceCard, borderWidth: 1.5, borderColor: colors.border, borderRadius: radii.md,
     color: colors.textPrimary, padding: 16, fontSize: 15.5, fontWeight: '500', minHeight: 100, textAlignVertical: 'top',
   },
-  hint: { ...type.small, fontSize: 12.5, marginTop: spacing.md, marginBottom: spacing.lg },
-  timeTitle: { ...type.h1, fontSize: 24 },
-  timeSubtitle: { ...type.small, marginTop: spacing.xs, marginBottom: spacing.lg },
-  timeCard: { backgroundColor: colors.surfaceCard, borderRadius: radii.lg, padding: spacing.lg, alignItems: 'center' },
-  bigTime: { color: colors.primary, fontSize: 40, fontWeight: '800', marginBottom: spacing.md },
-  timeButton: {
-    backgroundColor: colors.surfaceAlt, borderWidth: 1.5, borderColor: colors.border, borderRadius: radii.pill,
-    paddingVertical: spacing.sm, paddingHorizontal: spacing.lg, alignItems: 'center',
-  },
-  timeButtonText: { color: colors.textPrimary, fontSize: 15, fontWeight: '700' },
   primaryButtonSpacing: { marginTop: spacing.lg, marginBottom: spacing.xs },
 });

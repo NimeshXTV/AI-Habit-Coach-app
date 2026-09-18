@@ -39,7 +39,7 @@ class HabitServiceTest {
 
     @Test
     void createFromTextParsesAndPersistsWithTwentyOneDays() {
-        Habit habit = habitService.createFromText("I want to go to the gym every day at 6 PM for the next 21 days");
+        Habit habit = habitService.createFromText("device-1", "I want to go to the gym every day at 6 PM for the next 21 days");
 
         assertThat(habit.getId()).isNotNull();
         assertThat(habit.getName()).isEqualTo("Go to the gym");
@@ -54,7 +54,7 @@ class HabitServiceTest {
 
     @Test
     void createFromTextRespectsNonDefaultTotalDaysFromText() {
-        Habit habit = habitService.createFromText("read for 20 minutes every night for 14 days");
+        Habit habit = habitService.createFromText("device-1", "read for 20 minutes every night for 14 days");
 
         assertThat(habit.getTotalDays()).isEqualTo(14);
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(habit.getId())).hasSize(14);
@@ -65,7 +65,7 @@ class HabitServiceTest {
         // "drink water every day" parses to no explicit time (defaults to 18:00);
         // confirm should use the user-picked time instead, exactly like the
         // reference's confirm_habit() overriding goal_parser's guess.
-        Habit habit = habitService.createConfirmed("drink water every day", "09:15");
+        Habit habit = habitService.createConfirmed("device-1", "drink water every day", "09:15");
 
         assertThat(habit.getName()).isEqualTo("Drink water");
         assertThat(habit.getTimeOfDay()).isEqualTo("09:15");
@@ -73,25 +73,25 @@ class HabitServiceTest {
 
     @Test
     void createConfirmedRejectsMalformedTimeOfDay() {
-        assertThatThrownBy(() -> habitService.createConfirmed("drink water every day", "9:15am"))
+        assertThatThrownBy(() -> habitService.createConfirmed("device-1", "drink water every day", "9:15am"))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessage("time_of_day must be 'HH:MM' 24h");
     }
 
     @Test
     void createConfirmedRejectsOutOfRangeTimeOfDay() {
-        assertThatThrownBy(() -> habitService.createConfirmed("drink water every day", "25:00"))
+        assertThatThrownBy(() -> habitService.createConfirmed("device-1", "drink water every day", "25:00"))
                 .isInstanceOf(InvalidRequestException.class);
     }
 
     @Test
     void multipleHabitsCoexistWithDistinctIdsAndOwnDays() {
-        Habit gym = habitService.createFromText("go to the gym every day at 6pm");
-        Habit read = habitService.createFromText("read every night for 14 days");
+        Habit gym = habitService.createFromText("device-1", "go to the gym every day at 6pm");
+        Habit read = habitService.createFromText("device-1", "read every night for 14 days");
 
         assertThat(gym.getId()).isNotEqualTo(read.getId());
 
-        List<Habit> all = habitService.listHabits();
+        List<Habit> all = habitService.listHabits("device-1");
         assertThat(all).extracting(Habit::getId).contains(gym.getId(), read.getId());
 
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(gym.getId())).hasSize(21);
@@ -100,10 +100,10 @@ class HabitServiceTest {
 
     @Test
     void listHabitsReturnsMostRecentFirst() {
-        Habit first = habitService.createFromText("gym every day");
-        Habit second = habitService.createFromText("read every day");
+        Habit first = habitService.createFromText("device-1", "gym every day");
+        Habit second = habitService.createFromText("device-1", "read every day");
 
-        List<Habit> all = habitService.listHabits();
+        List<Habit> all = habitService.listHabits("device-1");
 
         assertThat(all.get(0).getId()).isEqualTo(second.getId());
         assertThat(all.get(1).getId()).isEqualTo(first.getId());
@@ -111,9 +111,9 @@ class HabitServiceTest {
 
     @Test
     void getHabitReturnsPersistedHabit() {
-        Habit created = habitService.createFromText("gym every day at 6pm");
+        Habit created = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        Habit fetched = habitService.getHabit(created.getId());
+        Habit fetched = habitService.getHabit("device-1", created.getId());
 
         assertThat(fetched.getId()).isEqualTo(created.getId());
         assertThat(fetched.getName()).isEqualTo(created.getName());
@@ -121,7 +121,7 @@ class HabitServiceTest {
 
     @Test
     void getHabitThrowsNotFoundForUnknownId() {
-        assertThatThrownBy(() -> habitService.getHabit(999_999L))
+        assertThatThrownBy(() -> habitService.getHabit("device-1", 999_999L))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("habit not found");
     }
@@ -130,11 +130,11 @@ class HabitServiceTest {
     void neverAssumesHabitIdOne() {
         // Create a throwaway habit first so the one under test is NOT id 1,
         // then verify lookup still works by its real (non-1) id.
-        habitService.createFromText("throwaway habit");
-        Habit second = habitService.createFromText("gym every day at 6pm");
+        habitService.createFromText("device-1", "throwaway habit");
+        Habit second = habitService.createFromText("device-1", "gym every day at 6pm");
 
         assertThat(second.getId()).isNotEqualTo(1L);
-        Habit fetched = habitService.getHabit(second.getId());
+        Habit fetched = habitService.getHabit("device-1", second.getId());
         assertThat(fetched.getId()).isEqualTo(second.getId());
         assertThat(fetched.getName()).isEqualTo(second.getName());
     }
@@ -143,15 +143,15 @@ class HabitServiceTest {
 
     @Test
     void confirmedInitialTimeIsWhatTheUserPicked() {
-        Habit habit = habitService.createConfirmed("meditate every day", "06:45");
+        Habit habit = habitService.createConfirmed("device-1", "meditate every day", "06:45");
         assertThat(habit.getTimeOfDay()).isEqualTo("06:45");
     }
 
     @Test
     void updateScheduleChangesOnlyTimeOfDay() {
-        Habit habit = habitService.createFromText("gym every day at 6pm");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        Habit updated = habitService.updateSchedule(habit.getId(), "19:30");
+        Habit updated = habitService.updateSchedule("device-1", habit.getId(), "19:30");
 
         assertThat(updated.getTimeOfDay()).isEqualTo("19:30");
         assertThat(updated.getName()).isEqualTo(habit.getName());
@@ -161,42 +161,42 @@ class HabitServiceTest {
 
     @Test
     void updateScheduleRejectsMalformedTime() {
-        Habit habit = habitService.createFromText("gym every day at 6pm");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        assertThatThrownBy(() -> habitService.updateSchedule(habit.getId(), "7:30pm"))
+        assertThatThrownBy(() -> habitService.updateSchedule("device-1", habit.getId(), "7:30pm"))
                 .isInstanceOf(InvalidRequestException.class)
                 .hasMessage("time_of_day must be 'HH:MM' 24h");
 
         // rejected change must not have taken effect
-        assertThat(habitService.getHabit(habit.getId()).getTimeOfDay()).isEqualTo("18:00");
+        assertThat(habitService.getHabit("device-1", habit.getId()).getTimeOfDay()).isEqualTo("18:00");
     }
 
     @Test
     void updateScheduleRejectsOutOfRangeTime() {
-        Habit habit = habitService.createFromText("gym every day at 6pm");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        assertThatThrownBy(() -> habitService.updateSchedule(habit.getId(), "24:00"))
+        assertThatThrownBy(() -> habitService.updateSchedule("device-1", habit.getId(), "24:00"))
                 .isInstanceOf(InvalidRequestException.class);
-        assertThatThrownBy(() -> habitService.updateSchedule(habit.getId(), "12:60"))
+        assertThatThrownBy(() -> habitService.updateSchedule("device-1", habit.getId(), "12:60"))
                 .isInstanceOf(InvalidRequestException.class);
     }
 
     @Test
     void updateScheduleThrowsNotFoundForUnknownHabit() {
-        assertThatThrownBy(() -> habitService.updateSchedule(999_999L, "09:00"))
+        assertThatThrownBy(() -> habitService.updateSchedule("device-1", 999_999L, "09:00"))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("habit not found");
     }
 
     @Test
     void updateScheduleOnOneHabitDoesNotAffectAnother() {
-        Habit gym = habitService.createFromText("gym every day at 6pm");
-        Habit read = habitService.createFromText("read every night for 14 days");
+        Habit gym = habitService.createFromText("device-1", "gym every day at 6pm");
+        Habit read = habitService.createFromText("device-1", "read every night for 14 days");
 
-        habitService.updateSchedule(gym.getId(), "20:00");
+        habitService.updateSchedule("device-1", gym.getId(), "20:00");
 
-        assertThat(habitService.getHabit(gym.getId()).getTimeOfDay()).isEqualTo("20:00");
-        assertThat(habitService.getHabit(read.getId()).getTimeOfDay()).isEqualTo("21:00");
+        assertThat(habitService.getHabit("device-1", gym.getId()).getTimeOfDay()).isEqualTo("20:00");
+        assertThat(habitService.getHabit("device-1", read.getId()).getTimeOfDay()).isEqualTo("21:00");
     }
 
     @Test
@@ -205,13 +205,13 @@ class HabitServiceTest {
         // first-level cache) rather than trusting an in-memory managed
         // entity reference — this is what "persists across reload/restart"
         // actually means for a JPA-backed service.
-        Habit habit = habitService.createFromText("gym every day at 6pm");
-        habitService.updateSchedule(habit.getId(), "20:15");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+        habitService.updateSchedule("device-1", habit.getId(), "20:15");
 
         entityManager.flush();
         entityManager.clear();
 
-        Habit reloaded = habitService.getHabit(habit.getId());
+        Habit reloaded = habitService.getHabit("device-1", habit.getId());
         assertThat(reloaded.getTimeOfDay()).isEqualTo("20:15");
     }
 
@@ -219,9 +219,9 @@ class HabitServiceTest {
 
     @Test
     void continueHabitCreatesAFreshHabitReusingNameAndTime() {
-        Habit original = habitService.createFromText("gym every day at 6pm");
+        Habit original = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        Habit continued = habitService.continueHabit(original.getId(), null);
+        Habit continued = habitService.continueHabit("device-1", original.getId(), null);
 
         assertThat(continued.getId()).isNotEqualTo(original.getId());
         assertThat(continued.getName()).isEqualTo("Gym");
@@ -230,7 +230,7 @@ class HabitServiceTest {
         assertThat(continued.getStatus()).isEqualTo(HabitStatus.ACTIVE);
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(continued.getId())).hasSize(21);
         // original habit is untouched
-        assertThat(habitService.getHabit(original.getId()).getId()).isEqualTo(original.getId());
+        assertThat(habitService.getHabit("device-1", original.getId()).getId()).isEqualTo(original.getId());
     }
 
     @Test
@@ -238,64 +238,114 @@ class HabitServiceTest {
         // Faithful port: the reference's continue text never mentions
         // duration, so goal_parser falls back to its 30-minute default
         // regardless of the finished habit's actual duration.
-        Habit original = habitService.createConfirmed("study Java for one hour every evening", "19:00");
+        Habit original = habitService.createConfirmed("device-1", "study Java for one hour every evening", "19:00");
         assertThat(original.getDurationMinutes()).isEqualTo(60);
 
-        Habit continued = habitService.continueHabit(original.getId(), null);
+        Habit continued = habitService.continueHabit("device-1", original.getId(), null);
 
         assertThat(continued.getDurationMinutes()).isEqualTo(30);
     }
 
     @Test
     void continueHabitThrowsNotFoundForUnknownHabit() {
-        assertThatThrownBy(() -> habitService.continueHabit(999_999L, null))
+        assertThatThrownBy(() -> habitService.continueHabit("device-1", 999_999L, null))
                 .isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void stopHabitSetsStatusToStopped() {
-        Habit habit = habitService.createFromText("gym every day at 6pm");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
 
-        habitService.stopHabit(habit.getId());
+        habitService.stopHabit("device-1", habit.getId());
 
-        assertThat(habitService.getHabit(habit.getId()).getStatus()).isEqualTo(HabitStatus.STOPPED);
+        assertThat(habitService.getHabit("device-1", habit.getId()).getStatus()).isEqualTo(HabitStatus.STOPPED);
     }
 
     @Test
     void stopHabitOnUnknownIdDoesNotThrow() {
         // Matches the reference's db.update_habit_status(): silently
         // affects zero rows rather than 404ing.
-        assertThatCode(() -> habitService.stopHabit(999_999L)).doesNotThrowAnyException();
+        assertThatCode(() -> habitService.stopHabit("device-1", 999_999L)).doesNotThrowAnyException();
     }
 
     @Test
     void deleteHabitRemovesHabitAndAllItsDays() {
-        Habit habit = habitService.createFromText("gym every day at 6pm");
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
         Long id = habit.getId();
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(id)).hasSize(21);
 
-        habitService.deleteHabit(id);
+        habitService.deleteHabit("device-1", id);
 
-        assertThatThrownBy(() -> habitService.getHabit(id)).isInstanceOf(NotFoundException.class);
+        assertThatThrownBy(() -> habitService.getHabit("device-1", id)).isInstanceOf(NotFoundException.class);
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(id)).isEmpty();
     }
 
     @Test
     void deleteHabitThrowsNotFoundForUnknownHabit() {
-        assertThatThrownBy(() -> habitService.deleteHabit(999_999L))
+        assertThatThrownBy(() -> habitService.deleteHabit("device-1", 999_999L))
                 .isInstanceOf(NotFoundException.class)
                 .hasMessage("habit not found");
     }
 
     @Test
     void deletingOneHabitDoesNotAffectAnother() {
-        Habit gym = habitService.createFromText("gym every day at 6pm");
-        Habit read = habitService.createFromText("read every night for 14 days");
+        Habit gym = habitService.createFromText("device-1", "gym every day at 6pm");
+        Habit read = habitService.createFromText("device-1", "read every night for 14 days");
 
-        habitService.deleteHabit(gym.getId());
+        habitService.deleteHabit("device-1", gym.getId());
 
-        assertThatThrownBy(() -> habitService.getHabit(gym.getId())).isInstanceOf(NotFoundException.class);
-        assertThat(habitService.getHabit(read.getId()).getId()).isEqualTo(read.getId());
+        assertThatThrownBy(() -> habitService.getHabit("device-1", gym.getId())).isInstanceOf(NotFoundException.class);
+        assertThat(habitService.getHabit("device-1", read.getId()).getId()).isEqualTo(read.getId());
         assertThat(habitDayRepository.findByHabitIdOrderByDayNumber(read.getId())).hasSize(14);
+    }
+
+    // ---- device isolation (see CLAUDE_CONTEXT.md's onboarding/data-isolation fix) ----
+
+    @Test
+    void listHabitsNeverIncludesAnotherDevicesHabits() {
+        habitService.createFromText("device-1", "gym every day at 6pm");
+        habitService.createFromText("device-2", "meditate every day at 7am");
+
+        List<Habit> deviceOneHabits = habitService.listHabits("device-1");
+        List<Habit> deviceTwoHabits = habitService.listHabits("device-2");
+
+        assertThat(deviceOneHabits).extracting(Habit::getName).containsExactly("Gym");
+        assertThat(deviceTwoHabits).extracting(Habit::getName).containsExactly("Meditate");
+    }
+
+    @Test
+    void aFreshDeviceThatHasNeverCreatedAHabitSeesAnEmptyList() {
+        habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThat(habitService.listHabits("brand-new-device")).isEmpty();
+    }
+
+    @Test
+    void getHabitThrowsNotFoundWhenRequestedByADifferentDevice() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> habitService.getHabit("device-2", habit.getId()))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessage("habit not found");
+        // the owning device can still see it fine
+        assertThat(habitService.getHabit("device-1", habit.getId()).getId()).isEqualTo(habit.getId());
+    }
+
+    @Test
+    void updateScheduleThrowsNotFoundWhenRequestedByADifferentDevice() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> habitService.updateSchedule("device-2", habit.getId(), "09:00"))
+                .isInstanceOf(NotFoundException.class);
+        assertThat(habitService.getHabit("device-1", habit.getId()).getTimeOfDay()).isEqualTo("18:00");
+    }
+
+    @Test
+    void deleteHabitFromADifferentDeviceLeavesTheRealOwnersHabitIntact() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> habitService.deleteHabit("device-2", habit.getId()))
+                .isInstanceOf(NotFoundException.class);
+        assertThat(habitService.getHabit("device-1", habit.getId()).getId()).isEqualTo(habit.getId());
     }
 }

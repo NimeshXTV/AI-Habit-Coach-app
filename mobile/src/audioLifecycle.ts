@@ -1,7 +1,8 @@
 /**
  * The single audio-lifecycle entry point for "the coach has something to
- * say out loud" — used by a real scheduled-alarm tap, Test Coach, and the
- * post-snooze re-prompt. Guarantees only ONE JS audio source is ever
+ * say out loud" — used only by a real scheduled-alarm tap (cold start,
+ * warm launch, or foreground notification tap — see HabitScreen.tsx's
+ * openCoachSignal effect). Guarantees only ONE JS audio source is ever
  * active: the chime plays once, fully stops, and only THEN does speech
  * start — never simultaneously. `stopAlarmSequence()` can interrupt either
  * stage (used by STOP ALARM, and by Done/Snooze/Missed acting as an

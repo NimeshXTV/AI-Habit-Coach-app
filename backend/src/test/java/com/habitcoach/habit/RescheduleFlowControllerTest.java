@@ -43,7 +43,7 @@ class RescheduleFlowControllerTest {
     private HabitDayRepository habitDayRepository;
 
     private long createHabit(String text) throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"" + text + "\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -64,33 +64,33 @@ class RescheduleFlowControllerTest {
         setDay(id, 1, DayStatus.MISSED, "missed", "no_time");
         setDay(id, 2, DayStatus.MISSED, "missed", "no_time");
 
-        String currentBody = mockMvc.perform(get("/api/habits/" + id + "/current"))
+        String currentBody = mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.strategy").value("reschedule"))
                 .andExpect(jsonPath("$.suggested_time").value("19:00"))
                 .andReturn().getResponse().getContentAsString();
 
         // The suggestion must NOT have touched the actual schedule.
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("18:00"));
 
         // Calling /current again (no action taken) still just suggests —
         // still no mutation, proving repeated reads are side-effect-free
         // on the schedule itself.
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.suggested_time").value("19:00"));
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("18:00"));
 
         String suggestedTime = objectMapper.readTree(currentBody).get("suggested_time").asText();
 
         // Now the user explicitly approves it.
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"" + suggestedTime + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.time_of_day").value(suggestedTime));
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value(suggestedTime));
     }
 
@@ -100,16 +100,16 @@ class RescheduleFlowControllerTest {
         setDay(id, 1, DayStatus.MISSED, "missed", "too_tired");
         setDay(id, 2, DayStatus.MISSED, "missed", "too_tired");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.suggested_time").value("19:00"));
 
         // User picks 08:00 instead of the suggested 19:00 — must be honored as-is.
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"time_of_day\":\"08:00\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.time_of_day").value("08:00"));
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.habit.time_of_day").value("08:00"));
     }
 
@@ -117,7 +117,7 @@ class RescheduleFlowControllerTest {
     void suggestedTimeIsComputedFromCurrentAuthoritativeTimeNotAStaleValue() throws Exception {
         long id = createHabit("gym every day at 6pm"); // 18:00
         // Move the schedule once, unrelated to any suggestion.
-        mockMvc.perform(post("/api/habits/" + id + "/schedule").contentType("application/json")
+        mockMvc.perform(post("/api/habits/" + id + "/schedule").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"time_of_day\":\"10:00\"}")).andExpect(status().isOk());
 
         setDay(id, 1, DayStatus.MISSED, "missed", "no_time");
@@ -125,7 +125,7 @@ class RescheduleFlowControllerTest {
 
         // Suggestion must be +1h from the CURRENT (10:00) time, not the
         // original creation-time (18:00).
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.strategy").value("reschedule"))
                 .andExpect(jsonPath("$.suggested_time").value("11:00"));
     }
@@ -134,7 +134,7 @@ class RescheduleFlowControllerTest {
     void nonRescheduleStrategyNeverIncludesASuggestedTime() throws Exception {
         long id = createHabit("gym every day at 6pm");
 
-        mockMvc.perform(get("/api/habits/" + id + "/current"))
+        mockMvc.perform(get("/api/habits/" + id + "/current").header("X-Device-Id", "device-1"))
                 .andExpect(jsonPath("$.strategy").value("encouragement"))
                 .andExpect(jsonPath("$.suggested_time").doesNotExist());
     }

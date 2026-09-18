@@ -33,7 +33,7 @@ class HabitControllerTest {
 
     @Test
     void parseReturnsSnakeCaseFieldsWithoutPersisting() throws Exception {
-        mockMvc.perform(post("/api/habits/parse")
+        mockMvc.perform(post("/api/habits/parse").header("X-Device-Id", "device-1")
                         .contentType("application/json")
                         .content("{\"text\":\"go to the gym every day at 6pm\"}"))
                 .andExpect(status().isOk())
@@ -44,14 +44,14 @@ class HabitControllerTest {
                 .andExpect(jsonPath("$.time_specified").value(true));
 
         // parse must not create anything
-        mockMvc.perform(get("/api/habits"))
+        mockMvc.perform(get("/api/habits").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(0)));
     }
 
     @Test
     void createPersistsHabitAndReturnsSnakeCaseBody() throws Exception {
-        mockMvc.perform(post("/api/habits")
+        mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1")
                         .contentType("application/json")
                         .content("{\"text\":\"read every night for 14 days\"}"))
                 .andExpect(status().isOk())
@@ -64,7 +64,7 @@ class HabitControllerTest {
 
     @Test
     void confirmUsesUserPickedTimeOverParsedGuess() throws Exception {
-        mockMvc.perform(post("/api/habits/confirm")
+        mockMvc.perform(post("/api/habits/confirm").header("X-Device-Id", "device-1")
                         .contentType("application/json")
                         .content("{\"text\":\"drink water every day\",\"time_of_day\":\"09:15\"}"))
                 .andExpect(status().isOk())
@@ -74,7 +74,7 @@ class HabitControllerTest {
 
     @Test
     void confirmRejectsMalformedTimeWith400() throws Exception {
-        mockMvc.perform(post("/api/habits/confirm")
+        mockMvc.perform(post("/api/habits/confirm").header("X-Device-Id", "device-1")
                         .contentType("application/json")
                         .content("{\"text\":\"drink water every day\",\"time_of_day\":\"9:15am\"}"))
                 .andExpect(status().isBadRequest())
@@ -83,7 +83,7 @@ class HabitControllerTest {
 
     @Test
     void createMissingTextFieldReturns400() throws Exception {
-        mockMvc.perform(post("/api/habits")
+        mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1")
                         .contentType("application/json")
                         .content("{}"))
                 .andExpect(status().isBadRequest());
@@ -91,26 +91,26 @@ class HabitControllerTest {
 
     @Test
     void listReturnsAllCreatedHabits() throws Exception {
-        mockMvc.perform(post("/api/habits").contentType("application/json")
+        mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"text\":\"gym every day at 6pm\"}")).andExpect(status().isOk());
-        mockMvc.perform(post("/api/habits").contentType("application/json")
+        mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                 .content("{\"text\":\"read every night for 14 days\"}")).andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/habits"))
+        mockMvc.perform(get("/api/habits").header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(greaterThanOrEqualTo(2))));
     }
 
     @Test
     void getByIdReturnsHabitAndTwentyOneDays() throws Exception {
-        String body = mockMvc.perform(post("/api/habits").contentType("application/json")
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
                         .content("{\"text\":\"gym every day at 6pm\"}"))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
         long id = extractId(body);
 
-        mockMvc.perform(get("/api/habits/" + id))
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "device-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.habit.id").value(id))
                 .andExpect(jsonPath("$.habit.time_of_day").value("18:00"))
@@ -121,9 +121,39 @@ class HabitControllerTest {
 
     @Test
     void getByUnknownIdReturns404() throws Exception {
-        mockMvc.perform(get("/api/habits/999999"))
+        mockMvc.perform(get("/api/habits/999999").header("X-Device-Id", "device-1"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.detail").value("habit not found"));
+    }
+
+    // ---- device isolation (see CLAUDE_CONTEXT.md's onboarding/data-isolation fix) ----
+
+    @Test
+    void requestsWithoutADeviceIdHeaderAreRejected() throws Exception {
+        mockMvc.perform(get("/api/habits"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void aDifferentDeviceNeverSeesAnotherDevicesHabitList() throws Exception {
+        mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
+                .content("{\"text\":\"gym every day at 6pm\"}")).andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/habits").header("X-Device-Id", "a-completely-different-device"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$", hasSize(0)));
+    }
+
+    @Test
+    void aDifferentDeviceCannotFetchAnotherDevicesHabitById() throws Exception {
+        String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", "device-1").contentType("application/json")
+                        .content("{\"text\":\"gym every day at 6pm\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        long id = extractId(body);
+
+        mockMvc.perform(get("/api/habits/" + id).header("X-Device-Id", "a-completely-different-device"))
+                .andExpect(status().isNotFound());
     }
 
     private static long extractId(String json) {
