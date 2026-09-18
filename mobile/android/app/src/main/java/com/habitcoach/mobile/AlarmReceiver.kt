@@ -42,7 +42,7 @@ class AlarmReceiver : BroadcastReceiver() {
         )
         wakeLock.acquire(15_000L)
         try {
-            AlarmRingService.start(context, habitId, kind, habitName, habitEmoji)
+            AlarmRingService.start(context, habitId, kind, habitName, habitEmoji, timeOfDay)
             launchAlarmActivity(context, habitId, kind, habitName, habitEmoji)
 
             // The daily alarm is a one-shot trigger for "today's occurrence" —

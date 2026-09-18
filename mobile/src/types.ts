@@ -30,11 +30,11 @@ export interface CurrentIntervention {
   total_days?: number;
   intervention_text?: string;
   strategy?: string;
-  generated_by?: 'strands' | 'template';
+  generated_by?: 'strands' | 'template' | 'offline';
   suggested_time?: string;
   finished: boolean;
   summary?: string;
-  summary_generated_by?: 'strands' | 'template';
+  summary_generated_by?: 'strands' | 'template' | 'offline';
 }
 
 export interface ActionResult {
@@ -42,8 +42,14 @@ export interface ActionResult {
   day_number: number;
   response_text?: string;
   response_kind?: string;
-  generated_by?: 'strands' | 'template';
+  generated_by?: 'strands' | 'template' | 'offline';
   consecutive_missed_days?: number;
+  /** Only ever populated for an offline 'snoozed' action (see api.ts) —
+   * lets the caller read back today's snooze count without a second
+   * network-then-fallback round trip just to look up what was already
+   * computed. Absent for every online response (the backend doesn't send
+   * it), so this changes nothing about the online contract. */
+  snooze_count?: number;
 }
 
 export type FeedbackReason =

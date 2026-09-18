@@ -1,11 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
-  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   TouchableWithoutFeedback,
   View,
@@ -13,18 +11,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radii, shadow, spacing, type } from '../theme';
 import { PrimaryButton, GhostButton } from './Button';
-
-const ITEM_HEIGHT = 46;
-const VISIBLE_ROWS = 5;
-const PADDING_ROWS = Math.floor(VISIBLE_ROWS / 2);
-const WHEEL_HEIGHT = ITEM_HEIGHT * VISIBLE_ROWS;
-
-const HOURS = Array.from({ length: 12 }, (_, i) => i + 1); // 1..12
-const MINUTES = Array.from({ length: 60 }, (_, i) => i); // 0..59
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
 
 /** Parses a backend 'HH:mm' 24h string into { hour12, minute, period}. */
 function from24h(hhmm: string): { hour12: number; minute: number; period: 'AM' | 'PM' } {
@@ -41,70 +27,15 @@ function to24h(hour12: number, minute: number, period: 'AM' | 'PM'): string {
   return `${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
-interface WheelColumnProps {
-  values: number[];
-  index: number;
-  onChangeIndex: (index: number) => void;
-  /** Bumped by the parent whenever the wheel must jump to a new index
-   * programmatically (modal just opened) rather than from user scrolling. */
-  resetToken: number;
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function WheelColumn({ values, index, onChangeIndex, resetToken }: WheelColumnProps) {
-  const scrollRef = useRef<ScrollView>(null);
-  const isUserDriven = useRef(false);
-
-  useEffect(() => {
-    isUserDriven.current = false;
-    scrollRef.current?.scrollTo({ y: index * ITEM_HEIGHT, animated: false });
-    // Only re-sync on an explicit reset (modal opened with a new time), or
-    // on mount — NOT on every `index` change, since most of those changes
-    // originate from the user's own scroll and re-snapping mid-gesture
-    // would fight the gesture.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resetToken]);
-
-  function commitFromOffset(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    const y = e.nativeEvent.contentOffset.y;
-    const next = clamp(Math.round(y / ITEM_HEIGHT), 0, values.length - 1);
-    isUserDriven.current = true;
-    onChangeIndex(next);
-    scrollRef.current?.scrollTo({ y: next * ITEM_HEIGHT, animated: true });
-  }
-
-  function liveUpdateFromOffset(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    const y = e.nativeEvent.contentOffset.y;
-    const next = clamp(Math.round(y / ITEM_HEIGHT), 0, values.length - 1);
-    if (next !== index) {
-      isUserDriven.current = true;
-      onChangeIndex(next);
-    }
-  }
-
-  return (
-    <View style={styles.wheelColumn}>
-      <View pointerEvents="none" style={styles.wheelHighlight} />
-      <ScrollView
-        ref={scrollRef}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={ITEM_HEIGHT}
-        decelerationRate="fast"
-        scrollEventThrottle={32}
-        onScroll={liveUpdateFromOffset}
-        onMomentumScrollEnd={commitFromOffset}
-        onScrollEndDrag={commitFromOffset}
-        contentContainerStyle={{ paddingVertical: ITEM_HEIGHT * PADDING_ROWS }}
-      >
-        {values.map((v, i) => (
-          <View key={v} style={styles.wheelItem}>
-            <Text style={[styles.wheelItemText, i === index && styles.wheelItemTextSelected]}>
-              {String(v).padStart(2, '0')}
-            </Text>
-          </View>
-        ))}
-      </ScrollView>
-    </View>
-  );
+/** Keeps only digits and caps length — used while the user is still
+ * typing, before any clamping/defaulting happens (that only happens on
+ * blur/confirm, so partial input like "" or "1" isn't fought mid-type). */
+function digitsOnly(text: string, maxLength: number): string {
+  return text.replace(/[^0-9]/g, '').slice(0, maxLength);
 }
 
 interface TimePickerModalProps {
@@ -126,10 +57,13 @@ interface TimePickerModalProps {
 /**
  * The single reusable in-app time picker used by both Create Challenge
  * (when the AI couldn't find a time in the goal text) and Change Time on an
- * existing habit — replaces the OS DateTimePicker dialog everywhere. UI is
- * always 12h ("6:00 PM"); onConfirm always reports 24h ('HH:mm'), matching
- * exactly what the backend's time_of_day column and the native alarm
- * scheduler already expect, so no other layer needed to change.
+ * existing habit — replaces the OS DateTimePicker dialog everywhere. Entry
+ * is by TYPING hour/minute directly (two number-pad text fields) rather
+ * than a scroll wheel — a deliberate UX preference change from the
+ * original wheel-picker design. UI is always 12h ("6:00 PM"); onConfirm
+ * always reports 24h ('HH:mm'), matching exactly what the backend's
+ * time_of_day column and the native alarm scheduler already expect, so no
+ * other layer needed to change.
  */
 export default function TimePickerModal({
   visible,
@@ -142,23 +76,53 @@ export default function TimePickerModal({
   onCancel,
   onConfirm,
 }: TimePickerModalProps) {
-  const [hourIndex, setHourIndex] = useState(0);
-  const [minuteIndex, setMinuteIndex] = useState(0);
+  const [hourText, setHourText] = useState('12');
+  const [minuteText, setMinuteText] = useState('00');
   const [period, setPeriod] = useState<'AM' | 'PM'>('AM');
-  const [resetToken, setResetToken] = useState(0);
   const insets = useSafeAreaInsets();
+  const minuteInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (!visible) return;
     const { hour12, minute, period: p } = from24h(initialTime);
-    setHourIndex(hour12 - 1);
-    setMinuteIndex(minute);
+    setHourText(String(hour12));
+    setMinuteText(String(minute).padStart(2, '0'));
     setPeriod(p);
-    setResetToken((t) => t + 1);
   }, [visible, initialTime]);
 
-  const hour12 = HOURS[hourIndex] ?? 12;
-  const minute = MINUTES[minuteIndex] ?? 0;
+  // Live preview reflects whatever is currently typed, clamped only for
+  // DISPLAY — the text fields themselves are left exactly as typed so
+  // backspacing/retyping isn't fought (clamping/defaulting for the actual
+  // submitted value happens in confirm() below).
+  const previewHour = clamp(parseInt(hourText, 10) || 12, 1, 12);
+  const previewMinute = clamp(parseInt(minuteText, 10) || 0, 0, 59);
+
+  function handleHourChange(text: string) {
+    const digits = digitsOnly(text, 2);
+    setHourText(digits);
+    // Auto-advance to the minute field once a 2-digit hour (or any value
+    // >= 2, which can't take a second digit and still be <= 12) is typed —
+    // saves a manual tap between the two fields.
+    if (digits.length === 2 || parseInt(digits, 10) > 1) {
+      minuteInputRef.current?.focus();
+    }
+  }
+
+  function handleHourBlur() {
+    const clamped = clamp(parseInt(hourText, 10) || 12, 1, 12);
+    setHourText(String(clamped));
+  }
+
+  function handleMinuteBlur() {
+    const clamped = clamp(parseInt(minuteText, 10) || 0, 0, 59);
+    setMinuteText(String(clamped).padStart(2, '0'));
+  }
+
+  function confirm() {
+    const hour12 = clamp(parseInt(hourText, 10) || 12, 1, 12);
+    const minute = clamp(parseInt(minuteText, 10) || 0, 0, 59);
+    onConfirm(to24h(hour12, minute, period));
+  }
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onCancel} statusBarTranslucent>
@@ -172,13 +136,36 @@ export default function TimePickerModal({
           {hint && <Text style={styles.hint}>{hint}</Text>}
 
           <Text style={styles.bigTime}>
-            {hour12}:{String(minute).padStart(2, '0')} {period}
+            {previewHour}:{String(previewMinute).padStart(2, '0')} {period}
           </Text>
 
           <View style={styles.pickerRow}>
-            <WheelColumn values={HOURS} index={hourIndex} onChangeIndex={setHourIndex} resetToken={resetToken} />
+            <TextInput
+              style={styles.timeInput}
+              value={hourText}
+              onChangeText={handleHourChange}
+              onBlur={handleHourBlur}
+              keyboardType="number-pad"
+              maxLength={2}
+              selectTextOnFocus
+              returnKeyType="next"
+              onSubmitEditing={() => minuteInputRef.current?.focus()}
+              accessibilityLabel="Hour"
+            />
             <Text style={styles.colon}>:</Text>
-            <WheelColumn values={MINUTES} index={minuteIndex} onChangeIndex={setMinuteIndex} resetToken={resetToken} />
+            <TextInput
+              ref={minuteInputRef}
+              style={styles.timeInput}
+              value={minuteText}
+              onChangeText={(text) => setMinuteText(digitsOnly(text, 2))}
+              onBlur={handleMinuteBlur}
+              keyboardType="number-pad"
+              maxLength={2}
+              selectTextOnFocus
+              returnKeyType="done"
+              onSubmitEditing={handleMinuteBlur}
+              accessibilityLabel="Minute"
+            />
 
             <View style={styles.periodColumn}>
               <TouchableOpacity
@@ -200,7 +187,7 @@ export default function TimePickerModal({
 
           <PrimaryButton
             label={confirmLabel}
-            onPress={() => onConfirm(to24h(hour12, minute, period))}
+            onPress={confirm}
             loading={busy}
             style={styles.confirmButton}
           />
@@ -249,37 +236,21 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     borderWidth: 1.5,
     borderColor: colors.border,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
     paddingHorizontal: spacing.md,
     marginBottom: spacing.lg,
   },
-  wheelColumn: {
+  timeInput: {
     width: 64,
-    height: WHEEL_HEIGHT,
-  },
-  wheelHighlight: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: ITEM_HEIGHT * PADDING_ROWS,
-    height: ITEM_HEIGHT,
+    height: 56,
     borderRadius: radii.sm,
-    backgroundColor: colors.primaryBg,
-  },
-  wheelItem: {
-    height: ITEM_HEIGHT,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  wheelItemText: {
-    fontSize: 19,
-    fontWeight: '600',
-    color: colors.textMuted,
-  },
-  wheelItemTextSelected: {
-    color: colors.primary,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    textAlign: 'center',
     fontSize: 23,
     fontWeight: '800',
+    color: colors.primary,
   },
   colon: {
     fontSize: 24,

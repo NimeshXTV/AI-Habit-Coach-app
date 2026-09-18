@@ -1,51 +1,26 @@
 /**
- * The single audio-lifecycle entry point for "the coach has something to
- * say out loud" — used only by a real scheduled-alarm tap (cold start,
- * warm launch, or foreground notification tap — see HabitScreen.tsx's
- * openCoachSignal effect). Guarantees only ONE JS audio source is ever
- * active: the chime plays once, fully stops, and only THEN does speech
- * start — never simultaneously. `stopAlarmSequence()` can interrupt either
- * stage (used by STOP ALARM, and by Done/Snooze/Missed acting as an
- * implicit ack).
+ * Silences whatever the alarm is currently doing — used by STOP ALARM, and
+ * by Done/Snooze/Missed acting as an implicit ack.
  *
- * The bounded setTimeout below is pure UI-audio sequencing of two clips
- * that already fired in response to an event (a tap, a button press) — it
- * is NOT a polling mechanism and has nothing to do with how the alarm gets
- * scheduled or triggered (that's still 100% native AlarmManager, see
- * notifications.ts). Nothing here waits for or checks the clock.
+ * The actual ringing (beep, alternating with spoken motivation) is now
+ * entirely native — AlarmRingService, a foreground Service started
+ * directly by AlarmReceiver the instant the alarm fires, using Android's
+ * own TextToSpeech engine for the voice half (see AlarmRingService's
+ * javadoc for why: the JS-side one-shot chime+speech this file used to
+ * drive only ever ran if MainActivity reached the foreground and the JS
+ * bridge was alive, which in practice was not reliable — the beep kept
+ * working but the voice half silently never played). stopRingingAlarm()
+ * below tears down both the beep and any in-flight native speech together.
  *
- * This is deliberately NOT what makes the alarm "keep ringing" — this
- * one-shot chime+speech is a JS-only narration layer that only runs while
- * the JS bridge happens to be alive (foreground). The actual continuous,
- * survives-background/lock/swipe ringing is AlarmRingService, a native
- * foreground Service started directly by AlarmReceiver the instant the
- * alarm fires — see its javadoc. stopAlarmSequence() below stops BOTH
- * layers together, since every user action (Done/Snooze/Missed/Stop) that
- * calls this must silence everything at once.
+ * stopSpeaking() here is a separate, unrelated JS-side mechanism
+ * (speech.ts) used for narrating a POST-ACTION response (see
+ * HabitScreen.tsx's act()) — stopped here too since acting on the alarm is
+ * an implicit ack of anything still being read out from a previous moment.
  */
-import { playChime, stopChime } from './sound';
-import { speakCoachMessage, stopSpeaking } from './speech';
+import { stopSpeaking } from './speech';
 import { stopRingingAlarm } from './notifications';
 
-const CHIME_DURATION_MS = 2500; // assets/sounds/alarm.wav is ~2.4s
-
-let pendingTimer: ReturnType<typeof setTimeout> | null = null;
-
-export function playAlarmSequence(text: string): void {
-  stopAlarmSequence();
-  playChime();
-  pendingTimer = setTimeout(() => {
-    pendingTimer = null;
-    speakCoachMessage(text);
-  }, CHIME_DURATION_MS);
-}
-
 export function stopAlarmSequence(): void {
-  if (pendingTimer) {
-    clearTimeout(pendingTimer);
-    pendingTimer = null;
-  }
-  stopChime();
   stopSpeaking();
-  stopRingingAlarm(); // silence the native continuous ring too — see class javadoc
+  stopRingingAlarm();
 }

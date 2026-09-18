@@ -5,6 +5,8 @@ import com.habitcoach.coaching.CoachingService;
 import com.habitcoach.coaching.FeedbackLabels;
 import com.habitcoach.habit.Habit;
 import com.habitcoach.habit.HabitService;
+import com.habitcoach.habit.HabitStatus;
+import com.habitcoach.journey.DayStatus;
 import com.habitcoach.journey.HabitDay;
 import com.habitcoach.journey.JourneyService;
 import com.habitcoach.web.InvalidRequestException;
@@ -26,6 +28,11 @@ import java.util.Set;
 public class ActionService {
 
     private static final Set<String> VALID_ACTIONS = Set.of("done", "snoozed", "missed");
+
+    /** Valid targets for editDayStatus() — deliberately excludes "snoozed",
+     * which stays alarm/native-driven and is never something a manual
+     * calendar edit should set directly. */
+    private static final Set<String> VALID_DAY_STATUSES = Set.of("pending", "done", "missed");
 
     /** Matches the reference's f"feedback_reason must be one of {list(FEEDBACK_LABELS)}"
      * for its exact key order (too_tired, no_time, forgot, something_came_up,
@@ -73,5 +80,51 @@ public class ActionService {
         }
 
         return ActionResult.simple(dayNumber);
+    }
+
+    /**
+     * Manual calendar-tap correction (POST /api/habits/{id}/days/{dayNumber}/status)
+     * — distinct from recordAction() above: this is a direct status override
+     * the user explicitly picks for a SPECIFIC day, not an action against
+     * "whichever day is currently pending". Deliberately never calls
+     * CoachingService/Strands (see DayStatusEditResult's javadoc) and never
+     * touches action/feedbackReason/feedbackNote/interventionText/
+     * interventionStrategy/snoozeCount (see JourneyService.setDayStatus).
+     *
+     * Editable range is [1, currentDayNumber] — day 1 is always the habit's
+     * creation day (see JourneyService.initializeDays), so a day before that
+     * simply doesn't exist as a row and dayNumber < 1 already rejects it;
+     * there is no separate "before creation" case to special-case. A day
+     * ahead of currentDayNumber hasn't been reached yet and stays rejected.
+     *
+     * markCompleted IS still reachable from here: the ACTIVE-only guard
+     * below only blocks re-editing an already-completed habit, it doesn't
+     * stop THIS edit from being the one that resolves the last pending day
+     * (e.g. editing today's own final-day cell to "done") — so the same
+     * completion invariant recordAction() maintains is preserved here too.
+     */
+    @Transactional
+    public DayStatusEditResult editDayStatus(String deviceId, Long habitId, int dayNumber, String status) {
+        Habit habit = habitService.getHabit(deviceId, habitId); // 404 if missing or owned by a different device
+
+        if (status == null || !VALID_DAY_STATUSES.contains(status)) {
+            throw new InvalidRequestException("status must be pending | done | missed");
+        }
+        if (habit.getStatus() != HabitStatus.ACTIVE) {
+            throw new InvalidRequestException("only an active challenge's days can be edited");
+        }
+        if (dayNumber < 1 || dayNumber > habit.getTotalDays()) {
+            throw new InvalidRequestException("day_number out of range");
+        }
+        int currentDayNumber = JourneyService.currentDayNumber(journeyService.getDays(habitId));
+        if (dayNumber > currentDayNumber) {
+            throw new InvalidRequestException("cannot edit a day that hasn't been reached yet");
+        }
+
+        boolean journeyResolved = journeyService.setDayStatus(habitId, dayNumber, DayStatus.fromJson(status));
+        if (journeyResolved) {
+            habitService.markCompleted(habit);
+        }
+        return new DayStatusEditResult(true, dayNumber, status);
     }
 }

@@ -3,6 +3,8 @@ package com.habitcoach.habit;
 import com.habitcoach.action.ActionRequest;
 import com.habitcoach.action.ActionResult;
 import com.habitcoach.action.ActionService;
+import com.habitcoach.action.DayStatusEditRequest;
+import com.habitcoach.action.DayStatusEditResult;
 import com.habitcoach.coaching.CoachingService;
 import com.habitcoach.coaching.CurrentInterventionResponse;
 import com.habitcoach.coaching.InterventionResult;
@@ -103,6 +105,21 @@ public class HabitController {
     public ActionResult postAction(@RequestHeader("X-Device-Id") String deviceId, @PathVariable Long id,
                                     @Valid @RequestBody ActionRequest body) {
         return actionService.recordAction(deviceId, id, body.action(), body.feedbackReason(), body.feedbackNote());
+    }
+
+    /**
+     * Manual calendar-tap correction — lets the user explicitly set a
+     * SPECIFIC day's status (pending/done/missed) instead of only ever
+     * acting on whichever day the backend considers "current" (see
+     * POST /{id}/action above). Only a day already reached
+     * (dayNumber <= the current day) on a still-ACTIVE habit can be
+     * edited — see ActionService.editDayStatus for the full validation and
+     * why this deliberately never calls Strands/CoachingService.
+     */
+    @PostMapping("/{id}/days/{dayNumber}/status")
+    public DayStatusEditResult editDayStatus(@RequestHeader("X-Device-Id") String deviceId, @PathVariable Long id,
+                                              @PathVariable int dayNumber, @Valid @RequestBody DayStatusEditRequest body) {
+        return actionService.editDayStatus(deviceId, id, dayNumber, body.status());
     }
 
     /**

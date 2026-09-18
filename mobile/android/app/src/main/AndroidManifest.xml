@@ -48,6 +48,10 @@
          the user to tap anything first. Not exported: only our own
          PendingIntents ever target it. -->
     <receiver android:name=".AlarmReceiver" android:exported="false"/>
+    <!-- Snooze/Stop buttons on the alarm's heads-up notification (see
+         AlarmRingService.buildNotification) — not exported: only our own
+         PendingIntents ever target it. -->
+    <receiver android:name=".AlarmActionReceiver" android:exported="false"/>
     <!-- Continuous ringing until the user acts (see AlarmRingService's
          javadoc). stopWithTask=false is load-bearing: without it, swiping
          the app away from Recents would silence the ring, which is exactly

@@ -4,14 +4,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../api';
+import { drainNativeEvents } from '../localStore';
 import {
   cancelDailyAlarm, cancelSnoozeAlarm, dismissPresentedAlarmNotifications, scheduleDailyAlarm, scheduleSnoozeAlarm,
 } from '../notifications';
 import { speakCoachMessage } from '../speech';
-import { playAlarmSequence, stopAlarmSequence } from '../audioLifecycle';
+import { stopAlarmSequence } from '../audioLifecycle';
 import { fmtTime } from '../format';
 import { GhostButton, PrimaryButton } from '../components/Button';
 import TimePickerModal from '../components/TimePickerModal';
+import DayStatusEditModal, { type EditableDayStatus } from '../components/DayStatusEditModal';
+import AdvisorScreen from './AdvisorScreen';
 import { colors, radii, shadow, spacing, type } from '../theme';
 import type { CurrentIntervention, FeedbackReason, Habit, HabitDay } from '../types';
 
@@ -118,6 +121,30 @@ function habitDayDatesByDate(habit: Habit | null, days: HabitDay[]): Map<string,
   return map;
 }
 
+/**
+ * Same derivation as habitDayDatesByDate above, but unfiltered (every day,
+ * including today's still-pending one) and mapping to the day_number
+ * itself rather than a status — this is what makes a calendar cell
+ * tappable at all (see the calendar-tap manual-correction feature). Since
+ * day 1 is always the habit's creation date, there is never an entry for
+ * any real date before that — a date "before the challenge was created"
+ * simply isn't in this map, so it's never tappable; no separate guard is
+ * needed for that case beyond this map lookup plus the backend's own
+ * day_number >= 1 validation (see ActionService.editDayStatus).
+ */
+function dayNumbersByDate(habit: Habit | null, days: HabitDay[]): Map<string, number> {
+  const map = new Map<string, number>();
+  if (!habit) return map;
+  const start = new Date(habit.created_at);
+  start.setHours(0, 0, 0, 0);
+  for (const day of days) {
+    const d = new Date(start);
+    d.setDate(d.getDate() + (day.day_number - 1));
+    map.set(dateKey(d), day.day_number);
+  }
+  return map;
+}
+
 export default function HabitScreen({
   habitId, openCoachSignal, onHabitChanged, onOpenChallenges, onSignalConsumed,
 }: Props) {
@@ -143,6 +170,13 @@ export default function HabitScreen({
   // not tied to any habit-day business logic.
   const [profileName, setProfileName] = useState<string | null>(null);
   const [monthOffset, setMonthOffset] = useState(0);
+  const [advisorOpen, setAdvisorOpen] = useState(false);
+  // Manual calendar-tap correction (see DayStatusEditModal.tsx) — null
+  // means the sheet is closed. `date` is the real calendar Date the tapped
+  // cell resolved to, shown in the sheet so the user can confirm exactly
+  // which day they're about to change.
+  const [dayEditorTarget, setDayEditorTarget] = useState<{ dayNumber: number; date: Date } | null>(null);
+  const [editingDayCurrentStatus, setEditingDayCurrentStatus] = useState<HabitDay['status'] | null>(null);
   // Set only when a load() attempt fails AND there is nothing at all (not
   // even cached) to show — see load()'s javadoc. Spring Boot being
   // unreachable must never hang this screen on its loading spinner forever
@@ -200,6 +234,7 @@ export default function HabitScreen({
   // DONE/MISSED (and the auto-MISSED on a 3rd snooze), since those all flow
   // through load()/act() setting `days` from the fresh backend response.
   const dayStatusByDate = useMemo(() => habitDayDatesByDate(habit, days), [habit, days]);
+  const dayNumberMap = useMemo(() => dayNumbersByDate(habit, days), [habit, days]);
 
   /**
    * Never throws — api.getHabitDetail/getCurrent already fall back to a
@@ -213,6 +248,11 @@ export default function HabitScreen({
    */
   const load = useCallback(async (announce = false) => {
     try {
+      // Fold in whatever Snooze/Stop happened via the notification action
+      // while the app wasn't running (see AlarmActionReceiver.kt) before
+      // reading habit state, so a 3rd-snooze-triggered auto-miss (or any
+      // queued snooze) is already reflected in what loads below.
+      await drainNativeEvents();
       const detail = await api.getHabitDetail(habitId);
       const cur = await api.getCurrent(habitId);
       setHabit(detail.habit);
@@ -221,8 +261,11 @@ export default function HabitScreen({
       setLoadError(null);
       onHabitChanged(detail.habit);
       if (announce && !cur.finished && cur.intervention_text) {
+        // Just shows the ringing UI (STOP ALARM/SNOOZE banner) — the audio
+        // itself (beep alternating with spoken motivation) is entirely
+        // native by this point (see AlarmRingService.kt), already playing
+        // regardless of whether this effect ever runs.
         setRinging(true);
-        playAlarmSequence(cur.intervention_text); // chime, THEN (after it fully stops) speech — never both
       }
       return cur;
     } catch (e) {
@@ -335,10 +378,21 @@ export default function HabitScreen({
     try {
       if (habit) await scheduleSnoozeAlarm(habit, minutes);
 
-      await api.act(habitId, 'snoozed');
-      const detail = await api.getHabitDetail(habitId);
-      const dayNumber = current?.day_number ?? 1;
-      const snoozeCount = detail.days.find((d) => d.day_number === dayNumber)?.snooze_count ?? 0;
+      const snoozeResult = await api.act(habitId, 'snoozed');
+      // Offline, api.act already computed the resulting count locally
+      // (see api.ts) — reuse it directly instead of a second
+      // network-then-fallback round trip (getHabitDetail) that would just
+      // re-read the same value back, doubling the offline wait for
+      // nothing. Online, the backend doesn't send this field, so this
+      // falls through to the original getHabitDetail lookup unchanged.
+      let snoozeCount: number;
+      if (snoozeResult.generated_by === 'offline' && snoozeResult.snooze_count != null) {
+        snoozeCount = snoozeResult.snooze_count;
+      } else {
+        const detail = await api.getHabitDetail(habitId);
+        const dayNumber = current?.day_number ?? 1;
+        snoozeCount = detail.days.find((d) => d.day_number === dayNumber)?.snooze_count ?? 0;
+      }
 
       if (snoozeCount >= MAX_SNOOZES_PER_DAY) {
         await cancelSnoozeAlarm(habitId);
@@ -385,6 +439,37 @@ export default function HabitScreen({
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * Manual calendar-tap correction — sets ONE specific day's status
+   * directly (see api.editDayStatus). Deliberately no offline handling
+   * beyond the existing fail-fast reportActionOffline() path: unlike
+   * act()/saveTime(), this has no local-first branch, since the edit is
+   * gated on server-computed state that must stay authoritative (see
+   * api.ts's javadoc on this method). load(false) picks up every
+   * consequence automatically — the calendar markers, "Day N of M"
+   * shifting backward on a reset, or the habit flipping to finished if
+   * this resolved the last pending day.
+   */
+  async function editDayStatus(status: EditableDayStatus) {
+    if (!dayEditorTarget) return;
+    setBusy(true);
+    try {
+      await api.editDayStatus(habitId, dayEditorTarget.dayNumber, status);
+      setDayEditorTarget(null);
+      setEditingDayCurrentStatus(null);
+      await load(false);
+    } catch {
+      reportActionOffline();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function closeDayEditor() {
+    setDayEditorTarget(null);
+    setEditingDayCurrentStatus(null);
   }
 
   async function continueJourney() {
@@ -479,10 +564,24 @@ export default function HabitScreen({
             notes). Android's own notification infrastructure for the alarm
             is untouched; this only removes an in-app bell button. */}
         <View style={styles.headerRow}>
-          <Text style={styles.greetingSmall}>{greetingWord()},</Text>
-          <Text style={styles.greetingName} numberOfLines={1}>{profileName ?? 'there'}!</Text>
-          <View style={styles.greetingUnderline} />
-          <Text style={styles.greetingSubtitle}>Small steps, big results 💪</Text>
+          <View style={styles.headerTextCol}>
+            <Text style={styles.greetingSmall}>{greetingWord()},</Text>
+            <Text style={styles.greetingName} numberOfLines={1}>{profileName ?? 'there'}!</Text>
+            <View style={styles.greetingUnderline} />
+            <Text style={styles.greetingSubtitle}>Small steps, big results 💪</Text>
+          </View>
+          {/* Habit Advisor entry point — opens a full-screen chat scoped to
+              THIS habit (see AdvisorScreen.tsx/advisorStore.ts). Online-only;
+              the screen itself shows a clear unavailable state when it can't
+              be reached, never a fake/offline reply. */}
+          <TouchableOpacity
+            style={styles.advisorButton}
+            onPress={() => setAdvisorOpen(true)}
+            hitSlop={8}
+            accessibilityLabel="Open Habit Advisor"
+          >
+            <Text style={styles.advisorButtonIcon}>🤖</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Full-month calendar — "<"/">" step the displayed month client-side,
@@ -515,9 +614,20 @@ export default function HabitScreen({
             <View key={i} style={styles.weekRow}>
               {week.map((d) => {
                 const status = d.inMonth ? dayStatusByDate.get(d.dateKey) : undefined;
+                // Editable iff: it's a real day of THIS journey (in the
+                // unfiltered dayNumberMap — which, since day 1 is always
+                // the habit's creation date, never has an entry for any
+                // date before the challenge existed), the habit is still
+                // active, and that day has already been reached (never a
+                // future day) — mirrors ActionService.editDayStatus's own
+                // validation exactly, so a tap can never trigger a 400.
+                const dayNum = d.inMonth ? dayNumberMap.get(d.dateKey) : undefined;
+                const editable = dayNum != null && habit.status === 'active' && dayNum <= current.day_number;
+                const Cell = editable ? TouchableOpacity : View;
                 return (
-                  <View
+                  <Cell
                     key={d.key}
+                    activeOpacity={0.7}
                     style={[
                       styles.dateCircle,
                       !d.inMonth && styles.dateCircleOutMonth,
@@ -525,6 +635,13 @@ export default function HabitScreen({
                       status === 'done' && styles.dateCircleDone,
                       status === 'missed' && styles.dateCircleMissed,
                     ]}
+                    {...(editable ? {
+                      onPress: () => {
+                        const dayRow = days.find((dd) => dd.day_number === dayNum);
+                        setDayEditorTarget({ dayNumber: dayNum!, date: new Date(d.key) });
+                        setEditingDayCurrentStatus(dayRow?.status ?? 'pending');
+                      },
+                    } : {})}
                   >
                     <Text
                       style={[
@@ -537,7 +654,7 @@ export default function HabitScreen({
                     >
                       {status === 'done' ? '✓' : status === 'missed' ? '✕' : d.date}
                     </Text>
-                  </View>
+                  </Cell>
                 );
               })}
             </View>
@@ -716,6 +833,18 @@ export default function HabitScreen({
           <Text style={styles.goBackButtonText}>← Go back</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <AdvisorScreen habit={habit} visible={advisorOpen} onClose={() => setAdvisorOpen(false)} />
+
+      <DayStatusEditModal
+        visible={!!dayEditorTarget}
+        dayNumber={dayEditorTarget?.dayNumber ?? null}
+        date={dayEditorTarget?.date ?? null}
+        currentStatus={editingDayCurrentStatus}
+        busy={busy}
+        onCancel={closeDayEditor}
+        onChoose={editDayStatus}
+      />
     </View>
   );
 }
@@ -734,11 +863,17 @@ const styles = StyleSheet.create({
   offlineTitle: { ...type.h1, fontSize: 19, textAlign: 'center', marginBottom: spacing.xs },
   offlineHint: { ...type.small, textAlign: 'center', marginBottom: spacing.lg },
 
-  headerRow: { marginBottom: spacing.md },
+  headerRow: { marginBottom: spacing.md, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  headerTextCol: { flex: 1, paddingRight: spacing.sm },
   greetingSmall: { ...type.h2, fontSize: 18 },
   greetingName: { ...type.display, fontSize: 28, marginTop: -4 },
   greetingUnderline: { width: 60, height: 3, backgroundColor: colors.textHeading, borderRadius: 2, marginTop: 4, marginBottom: spacing.xs },
   greetingSubtitle: { ...type.small, fontSize: 13.5 },
+  advisorButton: {
+    width: 52, height: 52, borderRadius: 26, backgroundColor: colors.surfaceCard,
+    alignItems: 'center', justifyContent: 'center', ...shadow.card,
+  },
+  advisorButtonIcon: { fontSize: 24 },
 
   card: { backgroundColor: colors.surfaceCard, borderRadius: radii.lg, padding: spacing.md, marginBottom: spacing.md, ...shadow.soft },
   calendarHeadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },

@@ -88,6 +88,38 @@ class AlarmModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
         }
     }
 
+    /** Pulls (and clears) any snooze/missed events recorded by
+     * AlarmActionReceiver while JS wasn't running — see NativeEventLog's
+     * javadoc. Called by mobile/src/localStore.ts on every app foreground,
+     * so a notification-driven Snooze/Stop while the app was fully closed
+     * still ends up reflected in local habit-day state and queued for
+     * backend sync once online. Resolves a JSON array string (possibly
+     * "[]"), parsed on the JS side. */
+    @ReactMethod
+    fun drainNativeEvents(promise: Promise) {
+        try {
+            promise.resolve(NativeEventLog.drainEvents(reactApplicationContext))
+        } catch (e: Exception) {
+            promise.reject("drain_native_events_error", e)
+        }
+    }
+
+    /** Keeps the native per-day snooze counter (used to decide the 3rd
+     * snooze -> auto-missed cutoff, see AlarmActionReceiver) in sync with
+     * whatever JS just computed as authoritative — called after every
+     * successful snooze recording, regardless of whether it came from the
+     * in-app picker or a drained native event, so the two counters can
+     * never drift apart. */
+    @ReactMethod
+    fun syncSnoozeCount(habitId: Double, count: Double, promise: Promise) {
+        try {
+            NativeEventLog.setSnoozeCountToday(reactApplicationContext, habitId.toInt(), count.toInt())
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("sync_snooze_count_error", e)
+        }
+    }
+
     /** Cold-start pull: what habit/kind (if any) launched MainActivity this
      * time. Consumed once — calling this again returns null until another
      * alarm launches the app. Mirrors expo-notifications'

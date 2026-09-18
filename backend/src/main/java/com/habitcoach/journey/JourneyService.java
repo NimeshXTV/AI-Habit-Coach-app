@@ -104,6 +104,33 @@ public class JourneyService {
         return habitDayRepository.countByHabitIdAndStatus(habitId, DayStatus.PENDING) == 0;
     }
 
+    /**
+     * Manual calendar-tap correction path — sibling to recordAction() above
+     * but for an explicit, user-driven status override rather than an
+     * action-driven transition (see ActionService.editDayStatus). Touches
+     * ONLY status and completedAt: action/feedbackReason/feedbackNote/
+     * interventionText/interventionStrategy/snoozeCount are left exactly as
+     * they were, since this is a pure status correction, not a re-run of
+     * the done/missed/snoozed flow. completedAt is set to now() only when
+     * moving TO done, and cleared otherwise — a day that is no longer done
+     * must not still carry a stale completion timestamp. Returns true if no
+     * PENDING days remain afterward, mirroring recordAction()'s return
+     * value, so the caller can decide whether to mark the habit COMPLETED
+     * the same way.
+     */
+    @Transactional
+    public boolean setDayStatus(Long habitId, int dayNumber, DayStatus newStatus) {
+        HabitDay day = habitDayRepository.findByHabitIdAndDayNumber(habitId, dayNumber)
+                .orElseThrow(() -> new NoSuchElementException(
+                        "habit_day not found for habitId=" + habitId + " dayNumber=" + dayNumber));
+
+        day.setStatus(newStatus);
+        day.setCompletedAt(newStatus == DayStatus.DONE ? Instant.now() : null);
+        habitDayRepository.save(day);
+
+        return habitDayRepository.countByHabitIdAndStatus(habitId, DayStatus.PENDING) == 0;
+    }
+
     /** Port of db.py's delete_habit()'s day-row half: "DELETE FROM
      * habit_days WHERE habit_id = ?". Called before the habit row itself
      * is removed (see HabitService.deleteHabit) — same order the

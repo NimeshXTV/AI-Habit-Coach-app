@@ -362,4 +362,140 @@ class ActionServiceTest {
         assertThat(day(gym.getId(), 1).getStatus()).isEqualTo(DayStatus.MISSED);
         assertThat(day(read.getId(), 1).getStatus()).isEqualTo(DayStatus.DONE);
     }
+
+    // ---- editDayStatus: manual calendar-tap correction ----
+
+    @Test
+    void editDayStatusOnUnknownHabitThrowsNotFound() {
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", 999999L, 1, "done"))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void editDayStatusFromWrongDeviceThrowsNotFound() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> actionService.editDayStatus("a-different-device", habit.getId(), 1, "done"))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void editDayStatusRejectsInvalidStatusValue() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", habit.getId(), 1, "snoozed"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("status must be pending | done | missed");
+    }
+
+    @Test
+    void editDayStatusRejectsDayNumberBelowOne() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", habit.getId(), 0, "done"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("day_number out of range");
+    }
+
+    @Test
+    void editDayStatusRejectsDayNumberAboveTotalDays() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", habit.getId(), 22, "done"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("day_number out of range");
+    }
+
+    @Test
+    void editDayStatusRejectsAFutureDay() {
+        // A fresh habit's current day is 1 — day 2 hasn't been reached yet,
+        // regardless of it being "in range" (1..totalDays).
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", habit.getId(), 2, "done"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("cannot edit a day that hasn't been reached yet");
+    }
+
+    @Test
+    void editDayStatusRejectsANonActiveHabit() {
+        Habit habit = habitService.createFromText("device-1", "read every night for 1 days");
+        actionService.recordAction("device-1", habit.getId(), "done", null, null); // completes the 1-day habit
+
+        assertThatThrownBy(() -> actionService.editDayStatus("device-1", habit.getId(), 1, "missed"))
+                .isInstanceOf(InvalidRequestException.class)
+                .hasMessage("only an active challenge's days can be edited");
+    }
+
+    @Test
+    void editDayStatusMarkDoneSetsStatusAndCompletedAtLeavesOtherFieldsUntouched() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+        // Give day 1 some history first, via the normal snooze flow, to prove
+        // the edit below leaves it alone.
+        actionService.recordAction("device-1", habit.getId(), "snoozed", "no_time", null);
+
+        DayStatusEditResult result = actionService.editDayStatus("device-1", habit.getId(), 1, "done");
+
+        assertThat(result.ok()).isTrue();
+        assertThat(result.dayNumber()).isEqualTo(1);
+        assertThat(result.status()).isEqualTo("done");
+
+        HabitDay day1 = day(habit.getId(), 1);
+        assertThat(day1.getStatus()).isEqualTo(DayStatus.DONE);
+        assertThat(day1.getCompletedAt()).isNotNull();
+        // untouched by the edit:
+        assertThat(day1.getAction()).isEqualTo("snoozed");
+        assertThat(day1.getFeedbackReason()).isEqualTo("no_time");
+        assertThat(day1.getSnoozeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void editDayStatusMarkMissedClearsCompletedAt() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+        actionService.editDayStatus("device-1", habit.getId(), 1, "done");
+        assertThat(day(habit.getId(), 1).getCompletedAt()).isNotNull();
+
+        actionService.editDayStatus("device-1", habit.getId(), 1, "missed");
+
+        HabitDay day1 = day(habit.getId(), 1);
+        assertThat(day1.getStatus()).isEqualTo(DayStatus.MISSED);
+        assertThat(day1.getCompletedAt()).isNull();
+    }
+
+    @Test
+    void editDayStatusResetToPendingClearsCompletedAtAndShiftsCurrentDayNumberBackward() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+        actionService.recordAction("device-1", habit.getId(), "done", null, null); // day 1 done, current day is now 2
+
+        actionService.editDayStatus("device-1", habit.getId(), 1, "pending");
+
+        HabitDay day1 = day(habit.getId(), 1);
+        assertThat(day1.getStatus()).isEqualTo(DayStatus.PENDING);
+        assertThat(day1.getCompletedAt()).isNull();
+        assertThat(JourneyService.currentDayNumber(habitDayRepository.findByHabitIdOrderByDayNumber(habit.getId())))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void editDayStatusOnFinalPendingDayMarksHabitCompleted() {
+        Habit habit = habitService.createFromText("device-1", "read every night for 2 days");
+        actionService.recordAction("device-1", habit.getId(), "done", null, null); // day 1 done via the normal flow
+
+        actionService.editDayStatus("device-1", habit.getId(), 2, "done"); // day 2 resolved via the edit path instead
+
+        Habit reloaded = habitService.getHabit("device-1", habit.getId());
+        assertThat(reloaded.getStatus()).isEqualTo(HabitStatus.COMPLETED);
+    }
+
+    @Test
+    void editDayStatusResultCarriesNoCoachingFields() {
+        Habit habit = habitService.createFromText("device-1", "gym every day at 6pm");
+
+        DayStatusEditResult result = actionService.editDayStatus("device-1", habit.getId(), 1, "missed");
+
+        // The DTO shape itself has no responseText/responseKind/generatedBy
+        // fields (unlike ActionResult) — nothing to assert null on, which is
+        // the point: this path can never carry a coaching-generated reply.
+        assertThat(result).isEqualTo(new DayStatusEditResult(true, 1, "missed"));
+    }
 }

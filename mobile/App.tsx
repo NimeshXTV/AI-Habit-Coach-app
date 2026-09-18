@@ -7,8 +7,9 @@ import HabitScreen from './src/screens/HabitScreen';
 import ChallengesScreen from './src/screens/ChallengesScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import { addAlarmLaunchListener, ensurePermissionsAndChannel, getInitialAlarm } from './src/notifications';
-import { api } from './src/api';
+import { api, runPendingSync } from './src/api';
 import { runBackendDiscovery } from './src/apiConfig';
+import { drainNativeEvents } from './src/localStore';
 import { colors } from './src/theme';
 import type { Habit } from './src/types';
 
@@ -55,6 +56,16 @@ function AppInner() {
         // before. Never awaited — must not delay app open (see the
         // networking-fix note below).
         void runBackendDiscovery();
+
+        // Fold in any Snooze/Stop that happened via the notification
+        // action while the app was fully closed (see AlarmActionReceiver.kt/
+        // localStore.ts), then opportunistically flush anything queued
+        // offline (no-ops instantly if there's nothing queued or we're
+        // still offline — see api.ts's runPendingSync). Neither is awaited
+        // here beyond the drain itself finishing (cheap, local-only) —
+        // sync depends on the network and must not delay app open.
+        await drainNativeEvents();
+        void runPendingSync();
 
         await ensurePermissionsAndChannel();
 
