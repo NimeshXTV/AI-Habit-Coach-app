@@ -70,4 +70,43 @@ describe('api.sendAdvisorMessage', () => {
 
     await expect(api.sendAdvisorMessage(1, 'hello', [])).rejects.toThrow(/500/);
   });
+
+  /**
+   * Regression test for the "Couldn't reach the Habit Advisor" bug seen on a
+   * physical device: sendAdvisorMessage used to share every other endpoint's
+   * 5s REQUEST_TIMEOUT_MS, which aborted the request client-side while a
+   * real LLM round-trip (Bedrock Mantle / GPT-OSS 120B, a reasoning model)
+   * was still genuinely in flight and would have succeeded. A fetch mock
+   * that only resolves once its AbortSignal is checked lets fake timers
+   * prove the advisor call now tolerates a response slower than the old 5s
+   * default without being aborted.
+   */
+  it('does not abort before the old 5s default would have, since it now uses a longer timeout for a real LLM round trip', async () => {
+    jest.useFakeTimers();
+    try {
+      let aborted = false;
+      globalThis.fetch = jest.fn((_url: unknown, opts?: RequestInit) => {
+        return new Promise((resolve, reject) => {
+          opts?.signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          });
+          setTimeout(() => {
+            if (!aborted) {
+              resolve({ ok: true, json: async () => ({ available: true, reply_text: 'a real reply' }) } as Response);
+            }
+          }, 10000); // slower than the old global 5s default, well within the advisor-specific timeout
+        });
+      }) as unknown as typeof fetch;
+
+      const resultPromise = api.sendAdvisorMessage(1, 'hello', []);
+      await jest.advanceTimersByTimeAsync(10000);
+      const result = await resultPromise;
+
+      expect(aborted).toBe(false);
+      expect(result).toEqual({ available: true, reply_text: 'a real reply' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

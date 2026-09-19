@@ -11,10 +11,11 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Habit Advisor chat endpoint. Device-scoped and habit-scoped exactly like
  * every route in HabitController (X-Device-Id header, 404 on an unowned/
- * unknown habit) — see AdvisorService.sendMessage. Today this always
- * returns an explicit "unavailable" response (see UnavailableAdvisorProvider);
- * that is the honest current contract, not a placeholder that pretends to
- * answer.
+ * unknown habit) — see AdvisorService.sendMessage. Replies come from the
+ * real Strands-backed provider (StrandsAdvisorProvider -> Bedrock Mantle)
+ * when reachable, or an explicit "unavailable" response (see
+ * UnavailableAdvisorProvider) when it isn't — never a fabricated or
+ * templated stand-in answer either way.
  */
 @RestController
 @RequestMapping("/api/habits/{habitId}/advisor")

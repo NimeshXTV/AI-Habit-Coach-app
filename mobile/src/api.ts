@@ -24,9 +24,19 @@ export { getApiBase } from './apiConfig';
  * or a clear "you're offline" state rather than hanging the whole screen. */
 const REQUEST_TIMEOUT_MS = 5000;
 
-async function timedFetch(url: string, options?: RequestInit): Promise<Response> {
+/** Habit Advisor messages are the one request kind that isn't a quick local-DB
+ * round trip — see AdvisorService/StrandsAdvisorProvider — they go all the way
+ * to a real, reasoning-capable LLM (Bedrock Mantle / GPT-OSS 120B) and back.
+ * That can easily take longer than REQUEST_TIMEOUT_MS's 5s (sized for "is the
+ * backend even reachable", not "wait for an LLM"), which was aborting the
+ * request client-side while the backend/Strands call was still genuinely in
+ * flight and would have succeeded — surfacing as "Couldn't reach the Habit
+ * Advisor" even though the backend was reachable and eventually responded. */
+const ADVISOR_REQUEST_TIMEOUT_MS = 45000;
+
+async function timedFetch(url: string, options?: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (e) {
@@ -37,7 +47,7 @@ async function timedFetch(url: string, options?: RequestInit): Promise<Response>
     // failure/cache-fallback behavior below is unaffected either way.
     void runBackendDiscovery();
     if (e instanceof Error && e.name === 'AbortError') {
-      throw new Error(`request to ${url} timed out after ${REQUEST_TIMEOUT_MS}ms (is the backend reachable?)`);
+      throw new Error(`request to ${url} timed out after ${timeoutMs}ms (is the backend reachable?)`);
     }
     throw e;
   } finally {
@@ -53,12 +63,12 @@ async function deviceHeaders(): Promise<Record<string, string>> {
   return { 'Content-Type': 'application/json', 'X-Device-Id': deviceId };
 }
 
-async function req<T>(path: string, options?: RequestInit): Promise<T> {
+async function req<T>(path: string, options?: RequestInit, timeoutMs?: number): Promise<T> {
   const base = await getApiBase();
   const res = await timedFetch(`${base}${path}`, {
     headers: await deviceHeaders(),
     ...options,
-  });
+  }, timeoutMs);
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`${options?.method || 'GET'} ${path} -> ${res.status}: ${body}`);
@@ -391,5 +401,5 @@ export const api = {
     req<AdvisorMessageResult>(`/habits/${habitId}/advisor/message`, {
       method: 'POST',
       body: JSON.stringify({ message, history }),
-    }),
+    }, ADVISOR_REQUEST_TIMEOUT_MS),
 };

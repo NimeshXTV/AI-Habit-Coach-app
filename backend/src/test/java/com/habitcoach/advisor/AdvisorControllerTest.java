@@ -9,6 +9,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -16,11 +17,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * End-to-end HTTP tests for POST /api/habits/{id}/advisor/message, run
  * against the app's real (unmodified) Spring context — so this exercises
- * the actual registered AdvisorProvider bean (UnavailableAdvisorProvider),
- * not a mock. Confirms: the JSON contract, device-ownership 404s (same
- * mechanism as every other habit route), blank-message 400, and — the
- * core requirement for this stage — that no LLM is ever called and no
- * fabricated/template reply is ever returned.
+ * the actual registered @Primary AdvisorProvider bean (StrandsAdvisorProvider),
+ * not a mock. application-test.yml points strands.base-url at a
+ * deliberately unreachable address, so every call here falls through to
+ * UnavailableAdvisorProvider exactly as before StrandsAdvisorProvider
+ * existed — deterministic, no live Strands/Bedrock process required.
+ * Confirms: the JSON contract, device-ownership 404s (same mechanism as
+ * every other habit route), blank-message 400, and — the core requirement
+ * for this stage — that no fabricated/template reply is ever returned when
+ * the real provider can't be reached. See StrandsAdvisorProviderTest for
+ * the successful-Strands-response path (mocked StrandsClient, no HTTP).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
@@ -33,6 +39,19 @@ class AdvisorControllerTest {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private AdvisorProvider advisorProvider;
+
+    /** Proves @Primary actually resolved to the real provider for this
+     * injection point (not just that the HTTP response happens to look the
+     * same either way, since both StrandsAdvisorProvider-falling-back and a
+     * bare UnavailableAdvisorProvider produce an identical available=false
+     * body). */
+    @Test
+    void primaryAdvisorProviderIsTheStrandsBackedOne() {
+        assertThat(advisorProvider).isInstanceOf(StrandsAdvisorProvider.class);
+    }
 
     private long createHabit(String deviceId, String text) throws Exception {
         String body = mockMvc.perform(post("/api/habits").header("X-Device-Id", deviceId).contentType("application/json")

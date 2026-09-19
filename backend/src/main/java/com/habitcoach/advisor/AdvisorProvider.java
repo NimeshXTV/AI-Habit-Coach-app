@@ -1,12 +1,16 @@
 package com.habitcoach.advisor;
 
 /**
- * The seam a real LLM connects through later. AdvisorService depends only
- * on this interface, never on Strands or Bedrock directly — so the future
- * change is exactly "add a StrandsAdvisorProvider implementation (Spring
- * Boot -> Strands -> Bedrock/LLM) and make it the active @Component instead
- * of UnavailableAdvisorProvider," with zero change to AdvisorService,
- * AdvisorController, the HTTP contract, or the mobile chat UI.
+ * The seam a real LLM connects through. AdvisorService depends only on this
+ * interface, never on Strands or Bedrock directly. The registered
+ * implementation is StrandsAdvisorProvider (Spring Boot -> StrandsClient ->
+ * Strands service -> Bedrock Mantle), marked @Primary so it's the one
+ * AdvisorService's constructor injection picks up; it falls back to
+ * UnavailableAdvisorProvider (still a plain @Component, unchanged) whenever
+ * Strands fails, times out, or returns an unusable response — see
+ * StrandsAdvisorProvider's javadoc. None of this required any change to
+ * AdvisorService, AdvisorController, the HTTP contract, or the mobile chat
+ * UI.
  */
 public interface AdvisorProvider {
 
